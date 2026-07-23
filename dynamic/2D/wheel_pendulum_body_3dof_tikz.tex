@@ -1,0 +1,292 @@
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{amsmath,amssymb}
+\usetikzlibrary{arrows.meta,calc}
+
+% ============================================================================
+% Adjustable model geometry (angles in degrees, lengths in cm)
+% ============================================================================
+\def\WheelCenterX{0.0}       % wheel-center coordinate O_w
+\def\WheelCenterY{0.0}
+\def\WheelRadius{1.05}       % wheel radius r
+\def\WheelHubRadius{0.16}
+
+\def\LegLength{3.65}         % exact distance |O_w H| = L
+\def\ThetaDeg{15.0}          % theta: clockwise from global +y
+\def\LegLineWidth{2.40pt}    % approximately 25 percent thinner than before
+
+\def\HipJointRadius{0.18}
+\def\BodyWidth{3.35}         % w_b, parallel to body longitudinal axis
+\def\BodyHeight{1.20}        % h_b, normal to body longitudinal axis
+\def\PhiDeg{12.0}            % phi: counterclockwise from global +x
+
+% ============================================================================
+% Adjustable annotation geometry
+% ============================================================================
+\def\XAxisLength{4.65}
+\def\YAxisLength{5.35}
+\def\GroundHalfLength{1.70}
+
+\def\LocalVerticalStart{0.27}
+\def\LocalVerticalLength{1.34}
+\def\ThetaArcRadius{1.15}
+\def\ThetaArcEndGapDeg{2.0}
+\def\ThetaLabelGap{0.32}
+\def\ThetaLabelAngularOffset{0.0}
+
+\def\PhiGuideLength{1.42}
+\def\PhiArcRadius{0.55}
+\def\PhiLabelGap{0.61}
+\def\PhiLabelAngularOffset{0.0}
+
+\def\BodyDimensionGap{0.29}
+\def\BodyExtensionOvershoot{0.10}
+
+\def\LegDimensionOffset{0.52}
+\def\LegDimensionExtensionOvershoot{0.04}
+
+\def\WheelTorqueRadius{1.02}
+\def\HipTorqueRadius{0.45}
+\def\TorqueLabelGap{0.22}
+\def\WheelTorqueStartDeg{238}
+\def\WheelTorqueSweepDeg{-108}
+\def\WheelTorqueLabelDeg{182}
+\def\HipTorqueStartDeg{205}
+\def\HipTorqueSweepDeg{-128}
+\def\HipTorqueLabelDeg{150}
+
+\def\JointLabelSep{7pt}
+\def\HipLabelRadius{0.60}
+\def\HipLabelAngle{225}
+\def\DimensionLabelSep{2pt}
+
+% ============================================================================
+% Unified line-width hierarchy
+% ============================================================================
+\def\OutlineLineWidth{1.05pt}
+\def\AxisLineWidth{0.90pt}
+\def\DimensionLineWidth{0.48pt}
+\def\ExtensionLineWidth{0.38pt}
+\def\GuideLineWidth{0.55pt}
+\def\TorqueLineWidth{0.95pt}
+
+% ============================================================================
+% Derived geometry: changing O_w, L, theta, r, phi, or body dimensions updates
+% every dependent object automatically.
+% ============================================================================
+\pgfmathsetmacro{\HipJointX}{\WheelCenterX + \LegLength*sin(\ThetaDeg)}
+\pgfmathsetmacro{\HipJointY}{\WheelCenterY + \LegLength*cos(\ThetaDeg)}
+
+\pgfmathsetmacro{\LegNormalX}{cos(\ThetaDeg)}
+\pgfmathsetmacro{\LegNormalY}{-sin(\ThetaDeg)}
+
+\pgfmathsetmacro{\ThetaArcDelta}{-\ThetaDeg + \ThetaArcEndGapDeg}
+\pgfmathsetmacro{\ThetaLabelRadius}{\ThetaArcRadius + \ThetaLabelGap}
+\pgfmathsetmacro{\ThetaLabelAngle}{90 - \ThetaDeg/2 + \ThetaLabelAngularOffset}
+
+\pgfmathsetmacro{\PhiLabelRadius}{\PhiArcRadius + \PhiLabelGap}
+\pgfmathsetmacro{\PhiLabelAngle}{\PhiDeg/2 + \PhiLabelAngularOffset}
+
+\pgfmathsetmacro{\WheelTorqueLabelRadius}{\WheelTorqueRadius + \TorqueLabelGap}
+\pgfmathsetmacro{\HipTorqueLabelRadius}{\HipTorqueRadius + \TorqueLabelGap}
+
+\begin{document}
+\begin{tikzpicture}[
+  x=1cm,
+  y=1cm,
+  line cap=round,
+  line join=round,
+  mechanism outline/.style={black,line width=\OutlineLineWidth},
+  axis/.style={line width=\AxisLineWidth,
+    -{Stealth[length=2.7mm,width=1.9mm]}},
+  local guide/.style={blue!65!black,line width=\GuideLineWidth,
+    densely dashed},
+  body guide/.style={red!75!black,line width=\GuideLineWidth,
+    densely dashed},
+  angle arrow/.style={line width=0.82pt,
+    -{Stealth[length=1.65mm,width=1.15mm]}},
+  torque arrow/.style={orange!85!black,line width=\TorqueLineWidth,
+    -{Stealth[length=2.4mm,width=1.75mm]}},
+  dimension/.style={<->,>={Stealth[length=1.65mm,width=1.15mm]},
+    line width=\DimensionLineWidth},
+  extension/.style={line width=\ExtensionLineWidth},
+  math label/.style={font=\large},
+  angle label/.style={font=\small},
+  dimension label/.style={font=\normalsize},
+  torque label/.style={font=\normalsize},
+  axis label/.style={font=\normalsize}
+]
+
+% ----------------------------------------------------------------------------
+% Named model coordinates
+% ----------------------------------------------------------------------------
+\coordinate (Ow) at (\WheelCenterX,\WheelCenterY);
+\coordinate (H) at (\HipJointX,\HipJointY);
+\coordinate (GroundContact) at ($(Ow)+(0,-\WheelRadius)$);
+
+% Leg-length dimension coordinates: offset from the leg along its right normal.
+\coordinate (LegDimOw) at
+  ($(Ow)+({\LegDimensionOffset*\LegNormalX},
+           {\LegDimensionOffset*\LegNormalY})$);
+\coordinate (LegDimH) at
+  ($(H)+({\LegDimensionOffset*\LegNormalX},
+          {\LegDimensionOffset*\LegNormalY})$);
+\coordinate (LegExtOw) at
+  ($(Ow)+({(\LegDimensionOffset+\LegDimensionExtensionOvershoot)*\LegNormalX},
+           {(\LegDimensionOffset+\LegDimensionExtensionOvershoot)*\LegNormalY})$);
+\coordinate (LegExtH) at
+  ($(H)+({(\LegDimensionOffset+\LegDimensionExtensionOvershoot)*\LegNormalX},
+          {(\LegDimensionOffset+\LegDimensionExtensionOvershoot)*\LegNormalY})$);
+
+% Body-axis guide endpoint.
+\coordinate (BodyAxisGuideEnd) at
+  ($(H)+({\PhiGuideLength*cos(\PhiDeg)},
+          {\PhiGuideLength*sin(\PhiDeg)})$);
+
+% ----------------------------------------------------------------------------
+% Ground: its height is derived from O_w and r, so it is tangent to the wheel.
+% ----------------------------------------------------------------------------
+\draw[gray!55,line width=\ExtensionLineWidth]
+  ($(GroundContact)+(-\GroundHalfLength,0)$) --
+  ($(GroundContact)+( \GroundHalfLength,0)$);
+
+% ----------------------------------------------------------------------------
+% Bottom layer: body first, then wheel. The body is centered at H and rotated
+% by phi, so its long edge is exactly parallel to the body-axis guide.
+% ----------------------------------------------------------------------------
+\begin{scope}[shift={(H)},rotate=\PhiDeg]
+  \draw[mechanism outline,fill=gray!8]
+    ({-\BodyWidth/2},{-\BodyHeight/2}) rectangle
+    ({ \BodyWidth/2},{ \BodyHeight/2});
+\end{scope}
+
+\draw[mechanism outline,fill=gray!4] (Ow) circle[radius=\WheelRadius];
+
+% ----------------------------------------------------------------------------
+% Middle layer: the leg centerline strictly joins O_w and H. Because it is
+% drawn after the body, it remains visible all the way to the hip center.
+% ----------------------------------------------------------------------------
+\draw[black,line width=\LegLineWidth] (Ow) -- (H);
+
+% ----------------------------------------------------------------------------
+% Coordinate axes: drawn above the filled mechanism so they remain continuous.
+% ----------------------------------------------------------------------------
+\draw[axis,red!85!black]
+  (Ow) -- ++(\XAxisLength,0)
+  node[axis label,below right=1pt] {$x$};
+\draw[axis,green!60!black]
+  (Ow) -- ++(0,\YAxisLength)
+  node[axis label,above left=1pt] {$y$};
+
+% ----------------------------------------------------------------------------
+% Local references and angle definitions
+% ----------------------------------------------------------------------------
+% Short local vertical reference at O_w. It starts outside the joint marker and
+% is parallel to global +y.
+\draw[local guide]
+  ($(Ow)+(0,\LocalVerticalStart)$) --
+  ($(Ow)+(0,\LocalVerticalLength)$);
+
+% theta: clockwise from global +y toward the leg. The arc stops slightly before
+% the leg centerline to prevent the arrowhead from overlapping the thick leg.
+\draw[angle arrow,blue!70!black]
+  ($(Ow)+(0,\ThetaArcRadius)$)
+  arc[start angle=90,delta angle=\ThetaArcDelta,radius=\ThetaArcRadius];
+\node[angle label,blue!70!black] at
+  ($(Ow)+({\ThetaLabelRadius*cos(\ThetaLabelAngle)},
+           {\ThetaLabelRadius*sin(\ThetaLabelAngle)})$)
+  {$\theta$};
+
+% phi: counterclockwise from the horizontal reference to the body long axis.
+\draw[body guide] (H) -- ++(\PhiGuideLength,0);
+\draw[body guide] (H) -- (BodyAxisGuideEnd);
+\draw[angle arrow,red!80!black]
+  ($(H)+(\PhiArcRadius,0)$)
+  arc[start angle=0,delta angle=\PhiDeg,radius=\PhiArcRadius];
+\node[angle label,red!80!black] at
+  ($(H)+({\PhiLabelRadius*cos(\PhiLabelAngle)},
+          {\PhiLabelRadius*sin(\PhiLabelAngle)})$)
+  {$\phi$};
+
+% ----------------------------------------------------------------------------
+% Parametric dimensions and extension lines
+% ----------------------------------------------------------------------------
+% Leg length L = |O_w H|, offset parallel to the leg.
+\draw[extension] (Ow) -- (LegExtOw);
+\draw[extension] (H) -- (LegExtH);
+\draw[dimension] (LegDimOw) -- (LegDimH)
+  node[midway,right=\DimensionLabelSep,dimension label] {$L$};
+
+% Body dimensions rotate with the body. Extension lines originate exactly at
+% body corners and reach the corresponding parallel/perpendicular dimensions.
+\begin{scope}[shift={(H)},rotate=\PhiDeg]
+  % Width w_b, parallel to the body long edge.
+  \draw[extension]
+    ({-\BodyWidth/2},{\BodyHeight/2}) --
+    ({-\BodyWidth/2},{\BodyHeight/2+\BodyDimensionGap+\BodyExtensionOvershoot});
+  \draw[extension]
+    ({ \BodyWidth/2},{\BodyHeight/2}) --
+    ({ \BodyWidth/2},{\BodyHeight/2+\BodyDimensionGap+\BodyExtensionOvershoot});
+  \draw[dimension]
+    ({-\BodyWidth/2},{\BodyHeight/2+\BodyDimensionGap}) --
+    ({ \BodyWidth/2},{\BodyHeight/2+\BodyDimensionGap})
+    node[midway,above=\DimensionLabelSep,dimension label] {$w_b$};
+
+  % Height h_b, perpendicular to the body long edge.
+  \draw[extension]
+    ({\BodyWidth/2},{-\BodyHeight/2}) --
+    ({\BodyWidth/2+\BodyDimensionGap+\BodyExtensionOvershoot},{-\BodyHeight/2});
+  \draw[extension]
+    ({\BodyWidth/2},{ \BodyHeight/2}) --
+    ({\BodyWidth/2+\BodyDimensionGap+\BodyExtensionOvershoot},{ \BodyHeight/2});
+  \draw[dimension]
+    ({\BodyWidth/2+\BodyDimensionGap},{-\BodyHeight/2}) --
+    ({\BodyWidth/2+\BodyDimensionGap},{ \BodyHeight/2})
+    node[midway,right=\DimensionLabelSep,dimension label] {$h_b$};
+\end{scope}
+
+% ----------------------------------------------------------------------------
+% Actuator torques: common color, line width, arrow tip, and label gap.
+% Both positive torque directions are clockwise on their target bodies.
+% ----------------------------------------------------------------------------
+\draw[torque arrow]
+  ($(Ow)+({\WheelTorqueRadius*cos(\WheelTorqueStartDeg)},
+           {\WheelTorqueRadius*sin(\WheelTorqueStartDeg)})$)
+  arc[start angle=\WheelTorqueStartDeg,
+      delta angle=\WheelTorqueSweepDeg,
+      radius=\WheelTorqueRadius];
+\node[torque label,orange!85!black] at
+  ($(Ow)+({\WheelTorqueLabelRadius*cos(\WheelTorqueLabelDeg)},
+           {\WheelTorqueLabelRadius*sin(\WheelTorqueLabelDeg)})$)
+  {$T_w$};
+
+\draw[torque arrow]
+  ($(H)+({\HipTorqueRadius*cos(\HipTorqueStartDeg)},
+          {\HipTorqueRadius*sin(\HipTorqueStartDeg)})$)
+  arc[start angle=\HipTorqueStartDeg,
+      delta angle=\HipTorqueSweepDeg,
+      radius=\HipTorqueRadius];
+\node[torque label,orange!85!black] at
+  ($(H)+({\HipTorqueLabelRadius*cos(\HipTorqueLabelDeg)},
+          {\HipTorqueLabelRadius*sin(\HipTorqueLabelDeg)})$)
+  {$T_h$};
+
+% ----------------------------------------------------------------------------
+% Top layer: joint circles and their labels. These cover line endpoints cleanly
+% while preserving the exact underlying O_w--H connection.
+% ----------------------------------------------------------------------------
+\draw[white,line width=2.8pt] (Ow) circle[radius=\WheelHubRadius];
+\draw[mechanism outline,fill=white] (Ow) circle[radius=\WheelHubRadius];
+\fill[black] (Ow) circle[radius=0.060];
+
+\draw[white,line width=2.8pt] (H) circle[radius=\HipJointRadius];
+\draw[mechanism outline,fill=white] (H) circle[radius=\HipJointRadius];
+\fill[black] (H) circle[radius=0.060];
+
+\node[math label,below right=\JointLabelSep] at (Ow) {$O_w$};
+\node[math label] at
+  ($(H)+({\HipLabelRadius*cos(\HipLabelAngle)},
+          {\HipLabelRadius*sin(\HipLabelAngle)})$)
+  {$H$};
+
+\end{tikzpicture}
+\end{document}

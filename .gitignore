@@ -1,0 +1,136 @@
+# =========================================================
+# MATLAB 临时文件、自动保存文件
+# =========================================================
+*.asv
+*.m~
+*.autosave
+*.bak
+*.tmp
+
+# MATLAB 日志与崩溃文件
+matlab_crash_dump.*
+java.log
+hs_err_pid*
+*.log
+
+# MATLAB/Simulink 缓存和自动生成目录
+*.slxc
+slprj/
+codegen/
+*_ert_rtw/
+*_grt_rtw/
+*_rsim_rtw/
+*_sfprj/
+sccprj/
+simulationCache/
+simulink_cache.xml
+
+# MATLAB MEX 编译产物
+*.mexw32
+*.mexw64
+*.mexa32
+*.mexa64
+*.mexglx
+*.mexmaci
+*.mexmaci64
+
+# MATLAB 打包产物
+*.mlappinstall
+*.mltbx
+
+
+# =========================================================
+# C/C++ 编译中间文件
+# =========================================================
+*.o
+*.obj
+*.lo
+*.d
+*.dep
+*.gcda
+*.gcno
+*.gcov
+
+# 静态库和动态库
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+
+# 可执行程序和调试文件
+*.exe
+*.out
+*.app
+*.elf
+*.pdb
+*.ilk
+*.dSYM/
+
+# 预编译头文件
+*.gch
+*.pch
+
+
+# =========================================================
+# CMake 构建产物
+# =========================================================
+build/
+build-*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+Testing/
+
+# 常见输出目录
+bin/
+obj/
+Debug/
+Release/
+x64/
+x86/
+
+
+# =========================================================
+# 仿真结果、程序输出
+# 根据你的目录结构调整
+# =========================================================
+output/
+outputs/
+result/
+results/
+logs/
+generated/
+temp/
+tmp/
+
+
+# =========================================================
+# 编辑器和 IDE
+# =========================================================
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# VS Code：默认不上传个人配置
+.vscode/
+
+
+# =========================================================
+# 操作系统文件
+# =========================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Linux 编辑器临时文件
+*~
+*.swp
+*.swo
