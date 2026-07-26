@@ -20,35 +20,48 @@ psHipY = oneBlock(subsys, "PS-Simulink Converter3");
 psWheel = oneBlock(subsys, "PS-Simulink Converter2");
 wheelVel = oneBlock(subsys, "Derivative2");
 hipYVel = oneBlock(subsys, "Derivative3");
-simPsHipX = oneBlock(subsys, "Simulink-PS Converter2");
-simPsHipY = oneBlock(subsys, "Simulink-PS Converter3");
+simPsHipX = optionalBlock(subsys, "Simulink-PS Converter2");
+simPsHipY = optionalBlock(subsys, "Simulink-PS Converter3");
 
-set_param(rect, ...
-    "PxTorqueActuationMode", "InputTorque", ...
-    "PyTorqueActuationMode", "InputTorque", ...
-    "PxMotionActuationMode", "ComputedMotion", ...
-    "PyMotionActuationMode", "ComputedMotion", ...
-    "PxSensePosition", "on", ...
-    "PySensePosition", "on");
+if strlength(simPsHipX) > 0 && strlength(simPsHipY) > 0
+    set_param(rect, ...
+        "PxTorqueActuationMode", "InputTorque", ...
+        "PyTorqueActuationMode", "InputTorque", ...
+        "PxMotionActuationMode", "ComputedMotion", ...
+        "PyMotionActuationMode", "ComputedMotion", ...
+        "PxSensePosition", "on", ...
+        "PySensePosition", "on");
+else
+    set_param(rect, ...
+        "PxTorqueActuationMode", "NoTorque", ...
+        "PyTorqueActuationMode", "NoTorque", ...
+        "PxMotionActuationMode", "ComputedMotion", ...
+        "PyMotionActuationMode", "ComputedMotion", ...
+        "PxSensePosition", "on", ...
+        "PySensePosition", "on");
+end
 
 set_param(hipFcn, "MATLABFcn", "hip_position_pd", ...
     "OutputDimensions", "4", "Output1D", "on");
 set_param(hipDemux, "Outputs", "4");
 set_param(ctrlMux, "Inputs", "9");
 
-deletePhysicalLines(simPsHipX);
-deletePhysicalLines(simPsHipY);
-deleteInportLine(simPsHipX, 1);
-deleteInportLine(simPsHipY, 1);
 deleteOutportLine(hipDemux, 1);
 deleteOutportLine(hipDemux, 2);
 
-hipFxZero = ensureConstant(subsys, "Hip Fx Zero", [0 110 30 140]);
-hipFyZero = ensureConstant(subsys, "Hip Fy Zero", [0 145 30 175]);
-connect(hipFxZero, 1, simPsHipX, 1);
-connect(hipFyZero, 1, simPsHipY, 1);
-connectPhysical(simPsHipX, "RConn", 1, rect, "LConn", 2);
-connectPhysical(simPsHipY, "RConn", 1, rect, "LConn", 3);
+if strlength(simPsHipX) > 0 && strlength(simPsHipY) > 0
+    deletePhysicalLines(simPsHipX);
+    deletePhysicalLines(simPsHipY);
+    deleteInportLine(simPsHipX, 1);
+    deleteInportLine(simPsHipY, 1);
+
+    hipFxZero = ensureConstant(subsys, "Hip Fx Zero", [0 110 30 140]);
+    hipFyZero = ensureConstant(subsys, "Hip Fy Zero", [0 145 30 175]);
+    connect(hipFxZero, 1, simPsHipX, 1);
+    connect(hipFyZero, 1, simPsHipY, 1);
+    connectPhysical(simPsHipX, "RConn", 1, rect, "LConn", 2);
+    connectPhysical(simPsHipY, "RConn", 1, rect, "LConn", 3);
+end
 
 % q = [qh;qk;qw] and dq = [dqh;dqk;dqw]. The wheel angle must come from the
 % wheel revolute joint, not from the hip rectangular joint position.
@@ -121,6 +134,15 @@ if isempty(matches)
     error("configure_model:MissingBlock", "Missing block: %s/%s", parent, name);
 end
 block = matches{1};
+end
+
+function block = optionalBlock(parent, name)
+matches = find_system(parent, "SearchDepth", 1, "Name", name);
+if isempty(matches)
+    block = "";
+else
+    block = string(matches{1});
+end
 end
 
 function connect(srcBlock, srcPort, dstBlock, dstPort)

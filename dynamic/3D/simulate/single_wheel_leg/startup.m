@@ -68,6 +68,11 @@ ctrl.Kp = diag(ctrl.wn.^2);
 ctrl.Kd = diag(2 .* ctrl.zeta .* ctrl.wn);
 ctrl.tauMax = [160; 160; 45];
 ctrl.constraintDamping = 1e-9;
+ctrl.constraintVelocityGain = 20;
+ctrl.qpWqdd = [1; 1; 1];
+ctrl.qpWtau = 1e-5 * [1; 1; 1];
+ctrl.qpWFc = 1e-5 * [1; 1];
+ctrl.mu = 0.8;
 
 hip = struct();
 hip.xRef = 0;
