@@ -1,5 +1,5 @@
 function tau = PD_with_dynamic(x)
-%PD_WITH_DYNAMIC Dynamics feedforward plus PD tracking controller.
+%PD_WITH_DYNAMIC Computed-torque tracking controller.
 %
 % Interpreted MATLAB Fcn input:
 %   x = [t; qh; qk; dqh; dqk]

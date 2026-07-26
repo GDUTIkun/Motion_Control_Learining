@@ -2,8 +2,8 @@ function [pRef, dpRef, ddpRef] = hip_reference_trajectory(t, hip)
 %HIP_REFERENCE_TRAJECTORY Smooth hip x/y reference for upper-force testing.
 %
 % The reference holds the initial hip position, moves by hip.xStep/hip.yStep,
-% holds the target, then returns to the initial position with half-cosine
-% profiles.
+% holds the target, then returns to the initial position with fifth-order
+% minimum-jerk profiles.
 
 if nargin < 2 || isempty(hip)
     hip = evalin("base", "hip");
@@ -59,7 +59,12 @@ if duration <= 0
 end
 
 s = min(max(t / duration, 0), 1);
-alpha = 0.5 * (1 - cos(pi * s));
-dalpha = 0.5 * pi / duration * sin(pi * s);
-ddalpha = 0.5 * (pi / duration)^2 * cos(pi * s);
+
+% Minimum-jerk interpolation:
+%   alpha(0)=0, alpha(1)=1
+%   alpha_dot(0)=alpha_dot(1)=0
+%   alpha_ddot(0)=alpha_ddot(1)=0
+alpha = 10*s^3 - 15*s^4 + 6*s^5;
+dalpha = (30*s^2 - 60*s^3 + 30*s^4) / duration;
+ddalpha = (60*s - 180*s^2 + 120*s^3) / duration^2;
 end

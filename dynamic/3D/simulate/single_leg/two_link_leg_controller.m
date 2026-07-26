@@ -6,6 +6,9 @@ function tau = two_link_leg_controller(mode, x)
 %
 % Output:
 %   tau = [tau_h; tau_k]
+%
+% ctrl.Kp and ctrl.Kd are acceleration-level gains for computed torque.
+% ctrl.pdKp and ctrl.pdKd are torque-level gains for the pure-PD baseline.
 
 if numel(x) ~= 5
     error("two_link_leg_controller:InvalidInput", ...
@@ -22,14 +25,17 @@ q = x(2:3);
 dq = x(4:5);
 
 [qd, dqd, ddqd] = two_link_leg_reference(t, traj);
-tau_pd = ctrl.Kp * (qd - q) + ctrl.Kd * (dqd - dq);
+e = qd - q;
+de = dqd - dq;
 
 switch lower(string(mode))
     case "pd"
+        tau_pd = ctrl.pdKp * e + ctrl.pdKd * de;
         tau = tau_pd;
     case {"dynamic", "computed_torque", "feedforward"}
         [M, C, G] = two_link_leg_dynamics(q, dq, leg);
-        tau = M * ddqd + C + G + tau_pd;
+        v = ddqd + ctrl.Kd * de + ctrl.Kp * e;
+        tau = M * v + C + G;
     otherwise
         error("two_link_leg_controller:InvalidMode", ...
             "Unknown controller mode '%s'.", mode);
