@@ -1,4 +1,4 @@
-% Startup values for a planar wheel-leg force-tracking demo.
+% Startup values for a planar wheel-leg floating-base LQR + QP demo.
 %
 % Coordinate convention:
 %   - hip is the origin
@@ -84,8 +84,8 @@ hip.yRef = hip.yWorldRef - hip.baseYOffset;
 hip.dxRef = 0;
 hip.dyRef = 0;
 
-% Upper-layer surrogate: a hip position PD generates F_H,des. The hip joint
-% itself remains dynamically free; F_H,des is realized by the leg torques.
+% Legacy hip reference. The maintained upper layer is floating-base LQR;
+% these values still provide x/z references for the existing Simulink wiring.
 hip.settleTime = 1.0;
 hip.moveDuration = 6.0;
 hip.holdDuration = 1.0;
@@ -97,7 +97,6 @@ hip.Kp = diag([3000; 5000]);
 hip.Kd = diag([70; 70]);
 hip.forceBias = [0; 0];
 hip.forceMax = [140; 140];
-hip.command = @(x) hip_position_pd(x, hip);
 hip.reference = @(t) hip_reference_trajectory(t, hip);
 
 assignin("base", "hip", hip);
@@ -114,10 +113,28 @@ leg.dynamics = @(q, dq) wheel_leg_dynamics(q, dq, leg);
 leg.kinematics = @(q, dq, ddq) wheel_leg_kinematics(q, dq, ddq, leg);
 traj.reference = @(t) wheel_leg_reference(t, traj, leg);
 
+base = struct();
+base.m = hip.virtualMass(1);
+base.Iyy = 0.25;
+base.g = leg.g;
+base.rHBody = [0; -hip.baseYOffset];
+base.thetaEq = 0;
+base.xEq = [hip.xRef; hip.yRef; 0; hip.dxRef; hip.dyRef; 0];
+base.xRef = base.xEq;
+base.Q = diag([25, 80, 120, 8, 16, 10]);
+base.R = diag([1/80^2, 1/140^2, 1/60^2]);
+base.forceMax = hip.forceMax(:);
+base.momentMax = ctrl.tauMax(1);
+
+baseLqr = floating_base_lqr_design(base);
+hip.command = @(x) floating_base_lqr_force(x, baseLqr);
+
 assignin("base", "leg", leg);
 assignin("base", "ctrl", ctrl);
 assignin("base", "traj", traj);
 assignin("base", "hip", hip);
+assignin("base", "base", base);
+assignin("base", "baseLqr", baseLqr);
 
 fprintf("Loaded planar wheel-leg parameters into base workspace.\n");
 fprintf("Initial q0 = [%.4f; %.4f; %.4f] rad.\n", ...
@@ -130,3 +147,5 @@ fprintf("Hip reference: settle %.2f s, move %.2f s, hold %.2f s, return %.2f s.\
     hip.settleTime, hip.moveDuration, hip.holdDuration, hip.returnDuration);
 fprintf("Hip reference displacement: dx = %.4f m, dy = %.4f m.\n", ...
     hip.xStep, hip.yStep);
+fprintf("Floating-base LQR K loaded. Equilibrium [FHx; FHz; MBy] = [%.4f; %.4f; %.4f].\n", ...
+    baseLqr.model.uEq(1), baseLqr.model.uEq(2), baseLqr.model.uEq(3));
