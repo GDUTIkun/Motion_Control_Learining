@@ -41,6 +41,7 @@ wheelCenterZ = groundTop + leg.r;
 % Stage 1: wheel x follows hip x with the nominal offset; wheel z is fixed
 % by the ground. Express that desired wheel-center motion relative to hip.
 pO = [xOHNom; wheelCenterZ - pH(2)];
+pO = projectToReachableAnnulus(pO, leg);
 vO = [0; -vH(2)];
 aO = zeros(2, 1);
 
@@ -78,6 +79,20 @@ if evalin("base", "exist('hip', 'var')")
 else
     hip = struct();
 end
+end
+
+function p = projectToReachableAnnulus(p, leg)
+reach = norm(p);
+if reach < eps
+    p = [0; -(abs(leg.L1 - leg.L2) + 1e-3)];
+    return;
+end
+
+margin = 1e-3;
+minReach = abs(leg.L1 - leg.L2) + margin;
+maxReach = leg.L1 + leg.L2 - margin;
+targetReach = min(max(reach, minReach), maxReach);
+p = p * (targetReach / reach);
 end
 
 function rWorld = rotatePitch2D(rBody, theta)

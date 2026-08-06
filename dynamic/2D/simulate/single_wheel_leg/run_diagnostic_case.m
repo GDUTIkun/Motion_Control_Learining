@@ -155,7 +155,9 @@ metrics.t = t;
 metrics.theta = theta;
 metrics.dtheta = dtheta;
 metrics.xB = xin(:, 2);
+metrics.zB = xin(:, 3);
 metrics.dxB = xin(:, 5);
+metrics.dzB = xin(:, 6);
 metrics.qAbs = qAbs;
 metrics.dqAbs = dqAbs;
 metrics.qdAbs = qdAbs;
@@ -168,11 +170,83 @@ metrics.tau = tau;
 metrics.tauRefHip = tauRefHip;
 metrics.tauMomentError = tauMomentError;
 metrics.tauSat = tauSat;
+[contactVelocityActual, contactVelocityRef] = contactVelocityResiduals(xin, ...
+    qAbs, dqAbs, qdAbs, dqdAbs, vars);
+metrics.contactVelocityActual = contactVelocityActual;
+metrics.contactVelocityRef = contactVelocityRef;
+[wheelCenterActual, wheelCenterRef] = wheelCenterPositions(xin, qAbs, vars);
+metrics.wheelCenterActual = wheelCenterActual;
+metrics.wheelCenterRef = wheelCenterRef;
+metrics.wheelCenterError = wheelCenterActual - wheelCenterRef;
 metrics.qddCmd = qddCmd;
 metrics.qddSol = qddSol;
 metrics.qddError = qddSol - qddCmd;
 metrics.qpExitflag = qpExitflag;
 metrics.contactForce = contactForce;
+end
+
+function [actualPosition, refPosition] = wheelCenterPositions(xin, qAbs, vars)
+n = size(xin, 1);
+actualPosition = zeros(n, 2);
+refPosition = zeros(n, 2);
+
+xOHNom = 0;
+if isfield(vars.traj, "xO0")
+    xOHNom = vars.traj.xO0;
+end
+groundTop = vars.base.simscapeGroundTopY;
+if evalin("base", "exist('hip', 'var')") && evalin("base", "isfield(hip, 'groundTopY')")
+    groundTop = evalin("base", "hip.groundTopY");
+end
+
+for k = 1:n
+    baseState = xin(k, 2:7).';
+    pH = floatingHipPosition(baseState, vars.base);
+    kin = wheel_leg_kinematics(qAbs(k, :).', zeros(3, 1), [], vars.leg);
+    actualPosition(k, :) = (pH + kin.pO).';
+    refPosition(k, :) = [pH(1) + xOHNom, groundTop + vars.leg.r];
+end
+end
+
+function pH = floatingHipPosition(baseState, base)
+theta = baseState(3);
+rH = rotatePitch2D(base.rHBody(:), theta);
+pH = baseState(1:2) + rH;
+end
+
+function [actualResidual, refResidual] = contactVelocityResiduals(xin, ...
+    qAbs, dqAbs, qdAbs, dqdAbs, vars)
+n = size(xin, 1);
+actualResidual = zeros(n, 2);
+refResidual = zeros(n, 2);
+
+for k = 1:n
+    baseState = xin(k, 2:7).';
+    vH = floatingHipVelocity(baseState, vars.base);
+
+    kinActual = wheel_leg_kinematics(qAbs(k, :).', dqAbs(k, :).', [], vars.leg);
+    actualResidual(k, :) = (kinActual.Jc * dqAbs(k, :).' + vH).';
+
+    kinRef = wheel_leg_kinematics(qdAbs(k, :).', dqdAbs(k, :).', [], vars.leg);
+    refResidual(k, :) = (kinRef.Jc * dqdAbs(k, :).' + vH).';
+end
+end
+
+function vH = floatingHipVelocity(baseState, base)
+theta = baseState(3);
+dtheta = baseState(6);
+rH = rotatePitch2D(base.rHBody(:), theta);
+drdtheta = [-rH(2); rH(1)];
+vH = baseState(4:5) + dtheta * drdtheta;
+end
+
+function rWorld = rotatePitch2D(rBody, theta)
+rx0 = rBody(1);
+rz0 = rBody(2);
+rWorld = [
+    cos(theta)*rx0 - sin(theta)*rz0;
+    sin(theta)*rx0 + cos(theta)*rz0
+];
 end
 
 function [qddCmd, qddSol, qpExitflag, contactForce] = offlineQpDebug(xin, ...
@@ -221,6 +295,13 @@ summary.tauMomentMaxAbs = max(abs(metrics.tauMomentError));
 summary.tauMin = min(metrics.tau, [], 1);
 summary.tauMax = max(metrics.tau, [], 1);
 summary.tauSaturationRatio = mean(metrics.tauSat, 1);
+summary.contactVelocityActualRms = rms(metrics.contactVelocityActual);
+summary.contactVelocityActualMaxAbs = max(abs(metrics.contactVelocityActual), [], 1);
+summary.contactVelocityRefRms = rms(metrics.contactVelocityRef);
+summary.contactVelocityRefMaxAbs = max(abs(metrics.contactVelocityRef), [], 1);
+summary.wheelCenterFinalError = metrics.wheelCenterError(end, :);
+summary.wheelCenterRmsError = rms(metrics.wheelCenterError);
+summary.wheelCenterMaxAbsError = max(abs(metrics.wheelCenterError), [], 1);
 summary.qddErrorRms = rms(metrics.qddError);
 summary.qddErrorMaxAbs = max(abs(metrics.qddError), [], 1);
 summary.qpExitflags = unique(metrics.qpExitflag).';
@@ -248,6 +329,16 @@ fprintf(fid, "tau_h moment RMS/maxabs error: %.6g / %.6g N*m\n", ...
     summary.tauMomentRms, summary.tauMomentMaxAbs);
 fprintf(fid, "tau saturation ratio: %s\n", ...
     mat2str(summary.tauSaturationRatio, 6));
+fprintf(fid, "actual contact velocity RMS/maxabs: %s / %s m/s\n", ...
+    mat2str(summary.contactVelocityActualRms, 6), ...
+    mat2str(summary.contactVelocityActualMaxAbs, 6));
+fprintf(fid, "ref contact velocity RMS/maxabs: %s / %s m/s\n", ...
+    mat2str(summary.contactVelocityRefRms, 6), ...
+    mat2str(summary.contactVelocityRefMaxAbs, 6));
+fprintf(fid, "wheel-center final/RMS/maxabs error: %s / %s / %s m\n", ...
+    mat2str(summary.wheelCenterFinalError, 6), ...
+    mat2str(summary.wheelCenterRmsError, 6), ...
+    mat2str(summary.wheelCenterMaxAbsError, 6));
 fprintf(fid, "qddSol-qddCmd RMS: %s rad/s^2\n", ...
     mat2str(summary.qddErrorRms, 6));
 fprintf(fid, "qddSol-qddCmd maxabs: %s rad/s^2\n", ...
@@ -260,6 +351,7 @@ plotBase(metrics, outputDir);
 plotJointTracking(metrics, outputDir);
 plotTorque(metrics, outputDir);
 plotQp(metrics, outputDir);
+plotWheelCenter(metrics, outputDir);
 end
 
 function plotBase(metrics, outputDir)
@@ -331,12 +423,19 @@ end
 function plotQp(metrics, outputDir)
 t = linspace(metrics.t(1), metrics.t(end), size(metrics.qddError, 1));
 fig = figure("Visible", "off", "Name", "qp");
-tiledlayout(fig, 2, 1);
+tiledlayout(fig, 3, 1);
 nexttile;
 plot(t, metrics.qddError, "LineWidth", 1.1);
 grid on;
 ylabel("qddSol-qddCmd");
 legend("hip", "knee", "wheel");
+nexttile;
+plot(metrics.t, metrics.contactVelocityActual, "LineWidth", 1.1);
+hold on;
+plot(metrics.t, metrics.contactVelocityRef, "--", "LineWidth", 1.1);
+grid on;
+ylabel("contact v");
+legend("actual x", "actual z", "ref x", "ref z");
 nexttile;
 plot(t, metrics.contactForce, "LineWidth", 1.1);
 grid on;
@@ -344,5 +443,32 @@ ylabel("Fc");
 xlabel("time (s)");
 legend("Fcx", "Fcz");
 saveas(fig, fullfile(outputDir, "qp_debug.png"));
+close(fig);
+end
+
+function plotWheelCenter(metrics, outputDir)
+labels = ["x", "z"];
+fig = figure("Visible", "off", "Name", "wheel center");
+tiledlayout(fig, 2, 1);
+for i = 1:2
+    nexttile;
+    plot(metrics.t, metrics.wheelCenterActual(:, i), "LineWidth", 1.1);
+    hold on;
+    plot(metrics.t, metrics.wheelCenterRef(:, i), "--", "LineWidth", 1.1);
+    grid on;
+    ylabel("pO " + labels(i) + " (m)");
+    legend("actual", "ref");
+end
+xlabel("time (s)");
+saveas(fig, fullfile(outputDir, "wheel_center.png"));
+close(fig);
+
+fig = figure("Visible", "off", "Name", "wheel center error");
+plot(metrics.t, metrics.wheelCenterError, "LineWidth", 1.1);
+grid on;
+xlabel("time (s)");
+ylabel("pO actual-ref (m)");
+legend("x", "z");
+saveas(fig, fullfile(outputDir, "wheel_center_error.png"));
 close(fig);
 end

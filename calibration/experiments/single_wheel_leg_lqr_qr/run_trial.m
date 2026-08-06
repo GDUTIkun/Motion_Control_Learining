@@ -67,21 +67,14 @@ function caseResult = runOneCase(caseDef, model, cfg)
 setInitialState(caseDef.x0);
 assignPulseVariables(caseDef);
 
-evalin("base", "configure_model(false)");
+evalin("base", "configure_discrete_controller_timing(false)");
 configureHeadlessModel(model, cfg);
 configurePulseGenerator(model);
 set_param(model, "StopTime", char(string(caseDef.stopTime)));
 
-Simulink.sdi.clear;
-Simulink.sdi.setRecordData(true);
-markSignal("source/PD_only/Mux");
-markSignal("source/PD_only/Mux1");
-markSignal("source/PD_only/Interpreted MATLAB Function");
-markSignal("source/Interpreted MATLAB Function");
+simOut = sim(model, "ReturnWorkspaceOutputs", "on");
 
-sim(model, "ReturnWorkspaceOutputs", "on");
-
-signals = extractSignalsFromSdi();
+signals = extractSignalsFromLogsout(simOut.logsout);
 signals = addReferences(signals);
 metrics = computeMetrics(signals, caseDef);
 
@@ -90,7 +83,7 @@ caseResult.case = caseDef;
 caseResult.metrics = metrics;
 caseResult.signals = [];
 if isfield(cfg, "saveSignals") && cfg.saveSignals
-    caseResult.signals = signals;
+caseResult.signals = signals;
 end
 end
 
@@ -106,10 +99,6 @@ assignin("base", "trialInitialState", x0(:));
 evalin("base", "set_initial_base_state(trialInitialState); clear trialInitialState");
 end
 
-function markSignal(block)
-Simulink.sdi.markSignalForStreaming(block, 1, "on");
-end
-
 function matlabState = configureHeadlessMatlab()
 matlabState = struct("defaultFigureVisible", []);
 
@@ -119,10 +108,6 @@ try
 catch
 end
 
-try
-    Simulink.sdi.clear;
-catch
-end
 end
 
 function restoreHeadlessMatlab(matlabState)
@@ -192,19 +177,13 @@ catch
 end
 end
 
-function signals = extractSignalsFromSdi()
-runIDs = Simulink.sdi.getAllRunIDs;
-if isempty(runIDs)
-    error("run_trial:MissingSdiRun", "No SDI run was recorded.");
-end
-run = Simulink.sdi.getRun(runIDs(end));
-
+function signals = extractSignalsFromLogsout(logs)
 signals = struct();
-signals.base = extractVectorSignal(run, "source/PD_only/Mux", 7);
-signals.qpInput = extractVectorSignal(run, "source/PD_only/Mux1", 16);
-signals.uLqr = extractScalarVector(run, ...
+signals.base = extractLoggedMatrix(logs, "source/PD_only/Mux", 7);
+signals.qpInput = extractLoggedMatrix(logs, "source/PD_only/Mux1", 16);
+signals.uLqr = extractLoggedMatrix(logs, ...
     "source/PD_only/Interpreted MATLAB Function", 3);
-signals.tau = extractScalarVector(run, ...
+signals.tau = extractLoggedMatrix(logs, ...
     "source/Interpreted MATLAB Function", 3);
 
 signals.time = signals.base.time;
@@ -213,50 +192,30 @@ signals.qRel = signals.qpInput.data(:, 8:10);
 signals.dqRel = signals.qpInput.data(:, 11:13);
 end
 
-function sig = extractVectorSignal(run, blockPath, width)
-for idx = 1:run.SignalCount
-    s = run.getSignalByIndex(idx);
-    if blockPathOf(s) == string(blockPath)
-        values = s.Values;
-        data = double(values.Data);
-        if size(data, 2) == width
-            sig = struct("time", values.Time(:), "data", data);
-            return;
-        end
-    end
-end
-error("run_trial:MissingVectorSignal", ...
-    "Could not find %d-wide signal from %s.", width, blockPath);
-end
-
-function sig = extractScalarVector(run, blockPath, width)
-parts = cell(width, 1);
-time = [];
-for idx = 1:run.SignalCount
-    s = run.getSignalByIndex(idx);
-    if blockPathOf(s) ~= string(blockPath)
+function sig = extractLoggedMatrix(logs, blockPath, width)
+for idx = 1:logs.numElements
+    element = logs.get(idx);
+    if loggedBlockPath(element) ~= string(blockPath)
         continue;
     end
-    component = parseComponentIndex(s.Name);
-    if component >= 1 && component <= width
-        values = s.Values;
-        parts{component} = double(values.Data(:));
-        if isempty(time)
-            time = values.Time(:);
-        end
+
+    values = element.Values;
+    data = squeeze(double(values.Data));
+    if isvector(data)
+        data = data(:);
+    elseif size(data, 1) ~= numel(values.Time) ...
+            && size(data, 2) == numel(values.Time)
+        data = data.';
+    end
+
+    if size(data, 2) == width
+        sig = struct("time", values.Time(:), "data", data);
+        return;
     end
 end
 
-if isempty(time) || any(cellfun(@isempty, parts))
-    error("run_trial:MissingScalarVector", ...
-        "Could not assemble %d-wide signal from %s.", width, blockPath);
-end
-
-data = zeros(numel(time), width);
-for idx = 1:width
-    data(:, idx) = parts{idx};
-end
-sig = struct("time", time, "data", data);
+error("run_trial:MissingLoggedSignal", ...
+    "Could not find %d-wide logsout signal from %s.", width, blockPath);
 end
 
 function signals = addReferences(signals)
@@ -267,7 +226,8 @@ theta = signals.X(:, 3);
 dtheta = signals.X(:, 6);
 
 for idx = 1:n
-    [qdAbs, dqdAbs] = wheel_leg_reference(signals.time(idx));
+    [qdAbs, dqdAbs] = floating_base_leg_reference( ...
+        signals.time(idx), signals.X(idx, :).');
     qRef(idx, :) = [qdAbs(1) - theta(idx), qdAbs(2), qdAbs(3)];
     dqRef(idx, :) = [dqdAbs(1) - dtheta(idx), dqdAbs(2), dqdAbs(3)];
 end
@@ -313,22 +273,31 @@ metrics.pulseMaxAbsTau = NaN;
 metrics.pulseMaxAbsULqr = NaN;
 
 if isfield(caseDef, "pulseWindow") && all(isfinite(caseDef.pulseWindow))
-    inPulse = signals.time >= caseDef.pulseWindow(1) ...
-        & signals.time <= caseDef.pulseWindow(2);
-    if any(inPulse)
-        metrics.pulseMaxAbsTheta = max(abs(theta(inPulse)));
-        metrics.pulseMaxAbsTau = max(abs(tau(inPulse, :)), [], "all");
-        metrics.pulseMaxAbsULqr = max(abs(uLqr(inPulse, :)), [], "all");
-    end
+    metrics.pulseMaxAbsTheta = windowMaxAbs(signals.base.time, theta, ...
+        caseDef.pulseWindow);
+    metrics.pulseMaxAbsTau = windowMaxAbs(signals.tau.time, tau, ...
+        caseDef.pulseWindow);
+    metrics.pulseMaxAbsULqr = windowMaxAbs(signals.uLqr.time, uLqr, ...
+        caseDef.pulseWindow);
 end
 
 [metrics.stable, metrics.failureReason] = classifyStability(metrics);
 end
 
+function value = windowMaxAbs(t, data, window)
+inWindow = t >= window(1) & t <= window(2);
+if any(inWindow)
+    value = max(abs(data(inWindow, :)), [], "all");
+else
+    value = NaN;
+end
+end
+
 function [stable, reason] = classifyStability(metrics)
 limits = struct();
-limits.maxTheta = deg2rad(10);
-limits.finalTheta = deg2rad(1);
+limits.maxTheta = deg2rad(15);
+limits.finalTheta = deg2rad(2);
+limits.finalDtheta = 0.1;
 limits.tauSaturation = 0.95;
 limits.maxAbsX = 0.5;
 
@@ -338,6 +307,9 @@ if metrics.maxAbsTheta > limits.maxTheta
 end
 if abs(metrics.finalTheta) > limits.finalTheta
     reasons{end + 1} = "final theta not settled";
+end
+if abs(metrics.finalDtheta) > limits.finalDtheta
+    reasons{end + 1} = "final dtheta not settled";
 end
 if metrics.tauSaturationRatio > limits.tauSaturation
     reasons{end + 1} = "tau near saturation";
@@ -428,21 +400,11 @@ metrics.unstableCount = n - metrics.stableCount;
 metrics.weightSum = sum(weights);
 end
 
-function path = blockPathOf(signal)
-pathObj = signal.BlockPath;
-if isa(pathObj, "Simulink.SimulationData.BlockPath")
-    pathCell = pathObj.convertToCell;
+function path = loggedBlockPath(element)
+try
+    pathCell = element.BlockPath.convertToCell;
     path = string(pathCell{1});
-else
-    path = string(pathObj);
-end
-end
-
-function component = parseComponentIndex(name)
-tokens = regexp(char(name), "\((\d+)\)$", "tokens", "once");
-if isempty(tokens)
-    component = NaN;
-else
-    component = str2double(tokens{1});
+catch
+    path = string(element.BlockPath);
 end
 end

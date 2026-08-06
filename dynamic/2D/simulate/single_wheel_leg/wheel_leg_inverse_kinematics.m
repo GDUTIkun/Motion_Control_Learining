@@ -41,9 +41,19 @@ q = [qh; qk];
 
 kin = wheel_leg_kinematics([q; 0], zeros(3, 1), zeros(3, 1), leg);
 J = kin.JO(:, 1:2);
-dq = J \ vO;
+dq = dampedSolve(J, vO);
 
 kin = wheel_leg_kinematics([q; 0], [dq; 0], zeros(3, 1), leg);
 dJ = kin.dJO(:, 1:2);
-ddq = J \ (aO - dJ * dq);
+ddq = dampedSolve(J, aO - dJ * dq);
+end
+
+function x = dampedSolve(J, b)
+if rcond(J) > 1e-8
+    x = J \ b;
+    return;
+end
+
+lambda = 1e-6;
+x = J' * ((J * J' + lambda * eye(size(J, 1))) \ b);
 end

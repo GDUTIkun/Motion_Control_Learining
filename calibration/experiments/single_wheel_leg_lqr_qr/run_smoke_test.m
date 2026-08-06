@@ -19,7 +19,7 @@ if ~isfolder(cfg.trialsDir)
 end
 
 variableNames = {'log_s_qtheta', 'log_s_qdtheta', 'log_s_qx', ...
-    'log_s_qdx', 'log_s_rfhx', 'log_s_rmb'};
+    'log_s_qdx', 'log_s_rfhx', 'log_s_rfz', 'log_s_rmb'};
 x = array2table(zeros(1, numel(variableNames)), ...
     'VariableNames', variableNames);
 

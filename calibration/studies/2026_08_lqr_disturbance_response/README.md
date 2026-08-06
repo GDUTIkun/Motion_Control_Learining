@@ -2,6 +2,106 @@
 
 这个 study 用来扫描当前 2D 浮动基座单轮腿模型的稳定工作范围。
 
+## 当前状态更新（2026-08-06）
+
+后续抓取数据、实验设计和数据分析都在 `calibration` 工作区完成；
+`dynamic/2D/simulate/single_wheel_leg` 只保留模型本体、动力学和控制器代码。
+
+当前讨论决定先进入阶段 A：
+
+```text
+不改控制器，先定义并验证学习模型的接受指标和脉冲鲁棒性。
+目标工作范围：theta0 = +/-10 deg, dtheta0 = 0。
+鲁棒性输入：2.0 s 时加入 0.5 s 水平脉冲。
+轮子保持在 hip 正下方不是硬控制目标，只是阶段 1 IK 参考生成方式。
+```
+
+本 study 已切到阶段 A 轻量入口：
+
+```text
+theta0List = [-10, 0, 10] deg
+pulseAmplitudeList = [0, 5, 10] N
+pulseWindow = [2.0, 2.5] s
+stopTime = 5 s
+configure_discrete_controller_timing(false)
+stage-1 floating_base_leg_reference 指标口径
+```
+
+为减少批量运行耗时，`run_cases.m` 现在直接从 `simOut.logsout` 提取四路核心信号，
+不再通过 SDI streaming 抓取数据。正式扫描前仍建议先跑 1 个 case 做 smoke test。
+
+Smoke test（2026-08-06）：
+
+```text
+case: pitch_-10deg_pulse_0N
+resultDir: calibration/results/studies/2026_08_lqr_disturbance_response/20260806_193715
+stable: true
+failureReason: ok
+maxAbsThetaDeg: 10
+finalThetaDeg: 0.00967
+settlingTimeTheta: 1.80 s
+tauSaturationRatio: 0.069
+elapsedSeconds: 42.18 s
+```
+
+The updated `logsout` extraction path worked on this smoke case.
+
+Pulse smoke test（2026-08-06）：
+
+```text
+case: pitch_-10deg_pulse_5N
+resultDir: calibration/results/studies/2026_08_lqr_disturbance_response/20260806_194726
+stable: true
+failureReason: ok
+maxAbsThetaDeg: 10
+finalThetaDeg: 0.0187
+pulseMaxAbsThetaDeg: 5.36
+pulseMaxAbsTau: 5.96
+pulseMaxAbsULqr: 63.47
+elapsedSeconds: 40.98 s
+```
+
+Bugfix: pulse-window metrics now use each signal's own time vector. This avoids
+logical-index length mismatches when `base`, `tau`, and `uLqr` have different
+logged sample counts.
+
+High-disturbance smoke（2026-08-06）：
+
+```text
+case: pitch_10deg_pulse_10N
+resultDir: calibration/results/studies/2026_08_lqr_disturbance_response/20260806_195452
+simulation completed: yes
+stable: false
+failureReason: max theta too large; final theta not settled; final dtheta not settled; tau near saturation; x drift too large
+```
+
+Bugfix: stage-1 leg reference now projects the wheel-center target into the
+reachable two-link workspace, and IK velocity/acceleration solves use damped
+least squares near singularity. This prevents Scope/reference generation from
+producing invalid outputs when a failed case drives the hip/wheel geometry
+outside the nominal IK range.
+
+Full stage-A result（2026-08-06）：
+
+```text
+resultDir: calibration/results/studies/2026_08_lqr_disturbance_response/20260806_195701
+report: calibration/reports/2026_08_lqr_disturbance_response_summary.md
+stable: 6 / 9
+passed: all 0 N and 5 N pulse cases for theta0 = [-10, 0, 10] deg
+failed: all 10 N pulse cases
+```
+
+Decision:
+
+```text
+Stop scanning here. Do not refine pulseAmplitude = [6, 7, 8, 9] N for now.
+```
+
+Next work should interpret representative pass/fail cases and then tune LQR/QP
+parameters against this fixed 9-case baseline. Do not continue enlarging the
+stage-A sweep yet. Horizontal and vertical motion tests come later, after
+stationary robustness is acceptable.
+
 被测系统：
 
 ```text
@@ -43,9 +143,9 @@ plot_responses(out);
 2. 运行 startup
 3. 设置每个 case 的 base.x0 初始状态
 4. 设置 Pulse Generator 的脉冲变量
-5. 调用 configure_model(false)，只临时配置模型，不保存 source.slx
+5. 调用 configure_discrete_controller_timing(false)，只临时配置模型，不保存 source.slx
 6. 关闭可视化和不必要日志
-7. 标记并抓取核心信号
+7. 从 logsout 抓取核心信号
 8. 运行仿真
 9. 计算指标并保存结果
 ```
@@ -61,17 +161,19 @@ disturbance_cases.m
 默认扫描：
 
 ```text
-初始 pitch = [0, 1, 2, 3, 5] deg
-脉冲力     = [0, 2, 5, 10] N
+初始 pitch = [-10, 0, 10] deg
+脉冲力     = [0, 5, 10] N
+脉冲窗口   = 2.0 s 到 2.5 s
+仿真时间   = 5 s
 ```
 
-也就是 5 x 4 = 20 个工况。
+也就是 3 x 3 = 9 个工况。
 
 如果想改扫描范围，直接修改：
 
 ```matlab
-pitchDegList = [0, 1, 2, 3, 5];
-pulseAmplitudeList = [0, 2, 5, 10];
+pitchDegList = [-10, 0, 10];
+pulseAmplitudeList = [0, 5, 10];
 ```
 
 ## 初始状态怎么定义
@@ -110,7 +212,7 @@ disturbancePulseDelay
 默认值来自每个 case：
 
 ```matlab
-pulseDelay = 7.0;
+pulseDelay = 2.0;
 pulsePeriod = 10.0;
 pulseWidthPercent = 5.0;
 ```
@@ -118,7 +220,7 @@ pulseWidthPercent = 5.0;
 所以默认脉冲窗口是：
 
 ```text
-7.0 s 到 7.5 s
+2.0 s 到 2.5 s
 ```
 
 如果 `pulseAmplitudeN = 0`，就是无脉冲工况。
@@ -143,7 +245,7 @@ summary.csv
 
 ## 抓取哪些信号
 
-当前通过 SDI 标记并抓取四路核心信号：
+当前通过 `logsout` 抓取四路核心信号：
 
 ```text
 source/PD_only/Mux                         基座状态输入
@@ -190,8 +292,9 @@ pulseMaxAbsULqr      脉冲窗口内最大 LQR 输出
 `stable` 的第一版判据在 `run_cases.m` 里：
 
 ```text
-max |theta| <= 10 deg
-final |theta| <= 1 deg
+max |theta| <= 15 deg
+final |theta| <= 2 deg
+final |dtheta| <= 0.1 rad/s
 tauSaturationRatio <= 0.95
 max |x| <= 0.5 m
 ```
@@ -223,4 +326,4 @@ out = run_cases(cases);
 
 `run_cases` 会关闭 Mechanics Explorer 自动打开、Scope 自动打开、Scope workspace 保存、Simscape logging、普通 output/state/time 保存等，以便批量跑得更快。
 
-但它会保留必要的 SDI 信号记录，因为当前数据提取依赖四路被标记信号。
+数据提取现在依赖 `simOut.logsout` 中已有的四路核心信号，不再依赖 SDI streaming。
