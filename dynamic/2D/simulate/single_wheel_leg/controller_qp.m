@@ -16,9 +16,13 @@ function tau = controller_qp(x)
 %   x = [t; qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext]
 % or:
 %   x = [t; qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des]
+% or, for the floating-base plant:
+%   x = [t; xB; zB; thetaB; dxB; dzB; dthetaB;
+%        qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des]
 %
 % FH_ext is the body-on-leg reaction force. If the upper LQR returns the
-% force applied by the leg to the body, pass its negative here.
+% force applied by the leg to the body, pass its negative here. MBy_des is
+% the desired pure pitch moment applied by the leg to the body.
 
 [tau, ~] = controller_qp_core(x);
 end

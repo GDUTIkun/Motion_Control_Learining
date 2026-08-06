@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<System>
+  <P Name="Location">[-1, -8, 1921, 1033]</P>
+  <P Name="Open">on</P>
+  <P Name="ZoomFactor">200</P>
+  <P Name="ReportName">simulink-default.rpt</P>
+  <P Name="SIDHighWatermark">192</P>
+  <Block BlockType="Memory" Name="Controller Input Memory" SID="117">
+    <P Name="Position">[935, 820, 975, 850]</P>
+    <P Name="ZOrder">510</P>
+    <P Name="BlockMirror">on</P>
+    <P Name="NameLocation">top</P>
+    <P Name="InitialCondition">[0; base.x0; leg.q0; leg.dq0; floating_base_lqr_command([0; base.x0])]</P>
+  </Block>
+  <Block BlockType="MATLABFcn" Name="Interpreted MATLAB&#xA;Function" SID="96">
+    <PortCounts in="1" out="1"/>
+    <P Name="Position">[805, 820, 875, 850]</P>
+    <P Name="ZOrder">509</P>
+    <P Name="BlockMirror">on</P>
+    <P Name="NameLocation">top</P>
+    <P Name="MATLABFcn">controller_qp</P>
+    <P Name="OutputDimensions">3</P>
+  </Block>
+  <Block BlockType="SubSystem" Name="PD_only" SID="15">
+    <PortCounts in="1" out="1"/>
+    <P Name="Position">[775, 629, 1065, 781]</P>
+    <P Name="ZOrder">496</P>
+    <P Name="LibrarySourceProduct" Ref="bdmxdata:LibrarySourceProduct_15"/>
+    <P Name="TreatAsAtomicUnit">on</P>
+    <P Name="ContentPreviewEnabled">on</P>
+    <System Ref="system_15"/>
+  </Block>
+  <Line>
+    <P Name="ZOrder">27</P>
+    <P Name="Src">96#out:1</P>
+    <P Name="Points">[-89, 0; 0, -130]</P>
+    <P Name="Dst">15#in:1</P>
+  </Line>
+  <Line>
+    <P Name="ZOrder">36</P>
+    <P Name="Src">117#out:1</P>
+    <P Name="Dst">96#in:1</P>
+  </Line>
+  <Line>
+    <P Name="ZOrder">38</P>
+    <P Name="Src">15#out:1</P>
+    <P Name="Points">[17, 0; 0, 130]</P>
+    <P Name="Dst">117#in:1</P>
+  </Line>
+</System>

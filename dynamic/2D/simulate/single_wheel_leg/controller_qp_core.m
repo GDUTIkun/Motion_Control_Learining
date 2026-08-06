@@ -1,9 +1,9 @@
 function [tau, debug] = controller_qp_core(x)
 %CONTROLLER_QP_CORE Shared implementation for QP inverse dynamics.
 
-if ~ismember(numel(x), [9, 10, 11, 12])
+if ~ismember(numel(x), [9, 10, 11, 12, 16])
     error("controller_qp:InvalidInput", ...
-        "Expected x = [t; qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; optional MBy_des].");
+        "Expected fixed-hip 10D input or floating-base 16D input.");
 end
 
 leg = evalin("base", "leg");
@@ -12,16 +12,13 @@ traj = evalin("base", "traj");
 
 x = double(x(:));
 t = x(1);
-q = x(2:4);
-dq = x(5:7);
-[FH_ext, MBy_des] = parseUpperCommand(x);
+[q, dq, FH_ext, MBy_des, vH, aH] = parseControllerInput(x);
 
 [qd, dqd, ddqd] = wheel_leg_reference(t, traj, leg);
 qddCmd = ddqd + ctrl.Kd * (dqd - dq) + ctrl.Kp * (qd - q);
 
 [M, C, G] = wheel_leg_dynamics(q, dq, leg);
 kin = wheel_leg_kinematics(q, dq, [], leg);
-[vH, aH] = hipMotionTerms(t);
 
 Kc = getCtrlField(ctrl, "constraintVelocityGain", 0);
 bc = -kin.dJc * dq - aH - Kc * (kin.Jc * dq + vH);
@@ -33,9 +30,7 @@ wFc = getCtrlVec(ctrl, "qpWFc", 1e-5 * [1; 1]);
 
 tauRef = zeros(3, 1);
 if isfinite(MBy_des)
-    % MBy_des is the pure pitch moment applied by the leg to the body.
-    % The hip motor torque applied to the leg is the opposite reaction.
-    tauRef(1) = -MBy_des;
+    tauRef(1) = getCtrlField(ctrl, "hipMomentToTauSign", 1) * MBy_des;
 end
 
 H = diag([wQdd; wTau; wFc]);
@@ -78,7 +73,7 @@ if isempty(z) || exitflag <= 0 || any(~isfinite(z))
     % upper-layer load terms without calling legacy non-QP controllers.
     tau = M * qddCmd + C + G - kin.JH' * FH_ext;
     if isfinite(MBy_des)
-        tau(1) = tau(1) - MBy_des;
+        tau(1) = tau(1) + getCtrlField(ctrl, "hipMomentToTauSign", 1) * MBy_des;
     end
     qddSol = qddCmd;
     FcSol = zeros(2, 1);
@@ -89,6 +84,7 @@ else
 end
 
 tau = min(max(tau(:), -tauMax), tauMax);
+tau = getCtrlVec(ctrl, "tauSign", [1; 1; 1]) .* tau;
 debug = struct();
 debug.qdd = qddSol(:);
 debug.Fc = FcSol(:);
@@ -98,28 +94,96 @@ debug.MBy_des = MBy_des;
 debug.tauRef = tauRef(:);
 end
 
-function [FH_ext, MBy_des] = parseUpperCommand(x)
+function [q, dq, FH_ext, MBy_des, vH, aH] = parseControllerInput(x)
 % Supported layouts:
 %   9:  [t; q; dq; FHx_ext; FHz_ext]
-%   10: [t; q; dq; FHx_ext; FHz_ext; MBy_des]
+%   10: [t; q; dq; FHx_ext; FHz_ext; MBy_des]  formal Simulink interface
 %   11: [t; q; dq; Fcx; Fcz; FHx_ext; FHz_ext]
 %   12: [t; q; dq; Fcx; Fcz; FHx_ext; FHz_ext; MBy_des]
+%   16: [t; xB; zB; thetaB; dxB; dzB; dthetaB;
+%        qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des]
+%
+% In the 16D floating-base layout, qh is the hip joint angle relative to the
+% base. The fixed-hip leg model uses the absolute thigh angle, so qh_abs =
+% thetaB + qh. The hip velocity and command acceleration are included in the
+% rolling contact constraint.
 switch numel(x)
     case 9
+        q = x(2:4);
+        dq = x(5:7);
         FH_ext = x(8:9);
         MBy_des = NaN;
+        [vH, aH] = hipMotionTerms(x(1));
     case 10
+        q = x(2:4);
+        dq = x(5:7);
         FH_ext = x(8:9);
         MBy_des = x(10);
+        [vH, aH] = hipMotionTerms(x(1));
     case 11
+        q = x(2:4);
+        dq = x(5:7);
         FH_ext = x(10:11);
         MBy_des = NaN;
+        [vH, aH] = hipMotionTerms(x(1));
     case 12
+        q = x(2:4);
+        dq = x(5:7);
         FH_ext = x(10:11);
         MBy_des = x(12);
+        [vH, aH] = hipMotionTerms(x(1));
+    case 16
+        ctrl = evalin("base", "ctrl");
+        baseState = x(2:7);
+        qRel = x(8:10);
+        dqRel = x(11:13);
+        FH_ext = x(14:15);
+        MBy_des = x(16);
+        basePitchToAbsHipSign = getCtrlField(ctrl, ...
+            "basePitchToAbsHipSign", 1);
+        q = [qRel(1) + basePitchToAbsHipSign * baseState(3); ...
+            qRel(2); qRel(3)];
+        dq = [dqRel(1) + basePitchToAbsHipSign * baseState(6); ...
+            dqRel(2); dqRel(3)];
+        [vH, aH] = floatingHipMotionTerms(baseState, FH_ext, MBy_des);
     otherwise
         error("controller_qp:InvalidInput", "Unsupported input width.");
 end
+end
+
+function [vH, aH] = floatingHipMotionTerms(baseState, FH_ext, MBy_des)
+base = evalin("base", "base");
+ctrl = evalin("base", "ctrl");
+m = base.m;
+Iyy = base.Iyy;
+g = base.g;
+
+theta = baseState(3);
+dtheta = baseState(6);
+rH = rotatePitch2D(base.rHBody(:), theta);
+drdtheta = [-rH(2); rH(1)];
+d2rdtheta2 = [-rH(1); -rH(2)];
+
+vB = baseState(4:5);
+vH = vB + dtheta * drdtheta;
+
+% FH_ext is body-on-leg. The body receives the opposite force.
+FBody = -FH_ext(:);
+ddtheta = (rH(1)*FBody(2) - rH(2)*FBody(1) + MBy_des) / Iyy;
+aB = [FBody(1)/m; FBody(2)/m - g];
+aH = aB + ddtheta * drdtheta + dtheta^2 * d2rdtheta2;
+if ~getCtrlField(ctrl, "useFloatingHipAcceleration", false)
+    aH = zeros(2, 1);
+end
+end
+
+function rWorld = rotatePitch2D(rBody, theta)
+rx0 = rBody(1);
+rz0 = rBody(2);
+rWorld = [
+    cos(theta)*rx0 - sin(theta)*rz0;
+    sin(theta)*rx0 + cos(theta)*rz0
+];
 end
 
 function [vH, aH] = hipMotionTerms(t)

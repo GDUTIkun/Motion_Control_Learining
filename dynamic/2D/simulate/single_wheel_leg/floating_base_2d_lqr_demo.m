@@ -13,14 +13,20 @@
 clear;
 clc;
 
-addpath(fullfile(fileparts(mfilename("fullpath")), "..", "simulate", ...
-    "single_wheel_leg"));
-
 base = struct();
-base.m = 3.0;
-base.Iyy = 0.25;
 base.g = 9.81;
-base.rHBody = [0; -0.70];
+base.body = struct();
+base.body.mass = 3.0;
+base.body.lengthX = 0.45;
+base.body.widthY = 0.18;
+base.body.heightZ = 0.32;
+base.body.comPositionBody = [0; 0];
+base.body.hipPositionBody = [0; -base.body.heightZ/2];
+base.body.inertiaIyy = base.body.mass * ...
+    (base.body.lengthX^2 + base.body.heightZ^2) / 12;
+base.m = base.body.mass;
+base.Iyy = base.body.inertiaIyy;
+base.rHBody = base.body.hipPositionBody - base.body.comPositionBody;
 base.thetaEq = 0;
 base.xEq = [0; 0; 0; 0; 0; 0];
 base.Q = diag([25, 80, 120, 8, 16, 10]);
