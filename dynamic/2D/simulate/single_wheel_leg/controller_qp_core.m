@@ -1,5 +1,6 @@
 function [tau, debug] = controller_qp_core(x)
 %CONTROLLER_QP_CORE Shared implementation for QP inverse dynamics.
+persistent qpOptions zWarm
 
 if ~ismember(numel(x), [9, 10, 11, 12, 16])
     error("controller_qp:InvalidInput", ...
@@ -59,13 +60,31 @@ lb = [-inf(3, 1); -tauMax; -inf; 0];
 ub = [ inf(3, 1);  tauMax;  inf; inf];
 
 z0 = [qddCmd; zeros(3, 1); 0; max(0, sum([leg.m1, leg.m2, leg.mw]) * leg.g)];
+if t <= 0 || isempty(zWarm) || numel(zWarm) ~= 8 || any(~isfinite(zWarm))
+    zWarm = z0;
+elseif getCtrlField(ctrl, "qpWarmStart", true)
+    z0 = zWarm;
+end
 exitflag = -999;
-try
-    opts = optimoptions("quadprog", "Display", "off", ...
-        "Algorithm", "interior-point-convex");
-    [z, ~, exitflag] = quadprog(H, f, Aineq, bineq, Aeq, beq, lb, ub, z0, opts);
-catch
-    z = [];
+if string(getCtrlField(ctrl, "qpSolver", "quadprog")) == "equality"
+    [z, exitflag] = solveEqualityQp(H, f, Aeq, beq);
+    if ~isempty(z)
+        z(4:6) = min(max(z(4:6), -tauMax), tauMax);
+        z(8) = max(z(8), 0);
+        mu = getCtrlField(ctrl, "mu", 0.8);
+        z(7) = min(max(z(7), -mu*z(8)), mu*z(8));
+    end
+else
+    try
+        if isempty(qpOptions)
+            qpOptions = optimoptions("quadprog", "Display", "off", ...
+                "Algorithm", "interior-point-convex");
+        end
+        [z, ~, exitflag] = quadprog(H, f, Aineq, bineq, Aeq, beq, lb, ub, ...
+            z0, qpOptions);
+    catch
+        z = [];
+    end
 end
 
 if isempty(z) || exitflag <= 0 || any(~isfinite(z))
@@ -81,6 +100,7 @@ else
     qddSol = z(1:3);
     tau = z(4:6);
     FcSol = z(7:8);
+    zWarm = z;
 end
 
 tau = min(max(tau(:), -tauMax), tauMax);
@@ -213,4 +233,25 @@ else
     value = defaultValue;
 end
 value = value(:);
+end
+
+function [z, exitflag] = solveEqualityQp(H, f, Aeq, beq)
+n = size(H, 1);
+p = size(Aeq, 1);
+KKT = [
+    H, Aeq';
+    Aeq, zeros(p, p)
+];
+rhs = [-f; beq];
+if rcond(KKT) < 1e-12
+    KKT = KKT + 1e-9 * eye(size(KKT));
+end
+sol = KKT \ rhs;
+z = sol(1:n);
+if all(isfinite(z))
+    exitflag = 1;
+else
+    z = [];
+    exitflag = -1;
+end
 end

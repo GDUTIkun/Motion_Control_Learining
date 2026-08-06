@@ -9,7 +9,11 @@ function y = floating_base_lqr_command(x, baseLqr)
 % Output:
 %   y = [FHx_ext; FHz_ext; MBy_des]
 %
-% The LQR state uses the floating-base CoM state. The LQR wrench
+% The LQR state uses the floating-base CoM state. If base.controllerType is
+% "discrete", baseLqr.K is designed from the ZOH-discretized base model and
+% this function should be driven by sampled states in Simulink.
+%
+% The LQR wrench
 % [FHx_des; FHz_des; MBy_des] is the wrench applied by the leg to the body.
 % The leg QP uses the external force applied by the body to the leg, so this
 % function flips only the force components:

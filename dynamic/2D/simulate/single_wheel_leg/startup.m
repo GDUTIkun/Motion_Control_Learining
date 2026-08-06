@@ -65,6 +65,7 @@ traj.zORef = traj.zO0;
 traj.thetaWheelBase0 = sum(q_joint0);
 
 ctrl = struct();
+ctrl.Ts = 0.005;
 ctrl.bandwidthHz = [0.2651399877; 2.928535979; 3.753740554];
 ctrl.wn = 2 * pi * ctrl.bandwidthHz;
 ctrl.zeta = [0.7852988453; 0.7852988453; 0.7852988453];
@@ -79,6 +80,8 @@ ctrl.qpWqdd = [1; 1; 1];
 % and wheel torque entries as small regularizers.
 ctrl.qpWtau = [1.0; 5.946535182e-06; 5.946535182e-06];
 ctrl.qpWFc = [0.0002433157215; 0.0002433157215];
+ctrl.qpWarmStart = true;
+ctrl.qpSolver = "equality";
 % Match the Simscape Spatial Contact Force block conservatively
 % (static friction = 0.5, dynamic friction = 0.3 in source.slx).
 ctrl.mu = 0.45;
@@ -92,6 +95,7 @@ ctrl.basePitchToAbsHipSign = 1;
 % lower QP rolling constraint. This must be paired with an implicit solver
 % for the compliant Simscape contact model.
 ctrl.useFloatingHipAcceleration = true;
+ctrl.discreteExecution = true;
 
 hip = struct();
 hip.xRef = 0;
@@ -142,6 +146,8 @@ base.thetaEq = 0;
 base.xEq = [0; 0; 0; 0; 0; 0];
 base.xRef = [0; 0; 0; 0; 0; 0];
 base.x0 = zeros(6, 1);
+base.Ts = ctrl.Ts;
+base.controllerType = "discrete";
 base.hipRef = base.xRef(1:2) + base.rHBody;
 base.simscapeGroundTopY = 0.025;
 base.simscapeWorldYOffset = base.simscapeGroundTopY + leg.r ...
@@ -159,6 +165,8 @@ base.Q = diag([25, 80, 120, 8, 16, 10]);
 base.R = diag([1/80^2, 1/140^2, 1/60^2]);
 base.forceMax = hip.forceMax(:);
 base.momentMax = ctrl.tauMax(1);
+base.thetaIntegralGain = 80;
+base.thetaIntegralLimit = 0.5;
 
 baseLqr = floating_base_lqr_design(base);
 base.command = @(x) floating_base_lqr_command(x, baseLqr);
@@ -173,7 +181,6 @@ assignin("base", "baseLqr", baseLqr);
 [base, leg, hip, baseLqr] = set_initial_base_state(base.x0);
 
 if bdIsLoaded("source")
-    configure_model(false);
     suppress_scope_windows("source");
 end
 
@@ -195,3 +202,5 @@ fprintf("Hip in body frame: [%.4f; %.4f] m from CoM.\n", ...
     base.rHBody(1), base.rHBody(2));
 fprintf("Floating-base LQR K loaded. Equilibrium [FHx; FHz; MBy] = [%.4f; %.4f; %.4f].\n", ...
     baseLqr.model.uEq(1), baseLqr.model.uEq(2), baseLqr.model.uEq(3));
+fprintf("Floating-base controller: %s LQR, Ts = %.4f s.\n", ...
+    baseLqr.controllerType, baseLqr.Ts);

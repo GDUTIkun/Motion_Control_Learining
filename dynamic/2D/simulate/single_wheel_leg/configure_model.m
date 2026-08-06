@@ -28,15 +28,36 @@ wireFloatingBaseControllerInput(model);
 setInitialTargets(model);
 suppress_scope_windows(model);
 
-set_param(model, "Solver", "ode23t", ...
-    "MaxStep", "0.001", ...
+sampleTime = getControllerSampleTime(0.005);
+set_param(model, "Solver", "ode45", ...
+    "MaxStep", sprintf("%.15g", sampleTime), ...
     "RelTol", "1e-3", ...
     "AbsTol", "1e-4");
 
 if doSave
     save_system(model, [], "OverwriteIfChangedOnDisk", true);
 end
-fprintf("Configured %s for base-state LQR command + QP leg control.\n", model);
+fprintf("Configured %s for discrete LQR + sampled QP leg control, Ts = %.4f s.\n", ...
+    model, sampleTime);
+end
+
+function sampleTime = getControllerSampleTime(defaultValue)
+sampleTime = defaultValue;
+try
+    if evalin("base", "exist('base', 'var')") && ...
+            evalin("base", "isfield(base, 'Ts')")
+        sampleTime = evalin("base", "base.Ts");
+    elseif evalin("base", "exist('ctrl', 'var')") && ...
+            evalin("base", "isfield(ctrl, 'Ts')")
+        sampleTime = evalin("base", "ctrl.Ts");
+    end
+catch
+    sampleTime = defaultValue;
+end
+sampleTime = double(sampleTime);
+if ~isscalar(sampleTime) || ~isfinite(sampleTime) || sampleTime <= 0
+    sampleTime = defaultValue;
+end
 end
 
 function setInitialTargets(model)
