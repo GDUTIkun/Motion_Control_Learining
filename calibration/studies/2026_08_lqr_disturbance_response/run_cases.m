@@ -1,8 +1,14 @@
-function out = run_cases(cases)
+function out = run_cases(cases, lqrParams, limitParams)
 %RUN_CASES Run the LQR + QP disturbance-response study cases.
 
 if nargin < 1 || isempty(cases)
     cases = disturbance_cases();
+end
+if nargin < 2
+    lqrParams = [];
+end
+if nargin < 3
+    limitParams = [];
 end
 
 studyDir = fileparts(mfilename("fullpath"));
@@ -19,11 +25,13 @@ out.studyDir = studyDir;
 out.calibrationDir = calibrationDir;
 out.simDir = simDir;
 out.resultDir = resultDir;
+out.lqrParams = lqrParams;
+out.limitParams = limitParams;
 out.cases = repmat(struct("case", [], "signals", [], "metrics", []), numel(cases), 1);
 
 for idx = 1:numel(cases)
     fprintf("\nRunning case %d/%d: %s\n", idx, numel(cases), cases(idx).name);
-    caseResult = runOneCase(cases(idx), simDir);
+    caseResult = runOneCase(cases(idx), simDir, lqrParams, limitParams);
     out.cases(idx) = caseResult;
     save(fullfile(resultDir, sprintf("%s.mat", safeFileStem(cases(idx).name))), ...
         "caseResult");
@@ -38,7 +46,7 @@ fprintf("\nSaved study results to:\n%s\n", resultDir);
 disp(summary);
 end
 
-function caseResult = runOneCase(caseDef, simDir)
+function caseResult = runOneCase(caseDef, simDir, lqrParams, limitParams)
 caseTimer = tic;
 originalDir = pwd;
 cleanup = onCleanup(@() cd(originalDir));
@@ -48,6 +56,8 @@ matlabState = configureHeadlessMatlab();
 matlabCleanup = onCleanup(@() restoreHeadlessMatlab(matlabState));
 
 runScriptInBase(fullfile(simDir, "startup.m"));
+applyLimitParamsIfNeeded(limitParams);
+applyLqrParamsIfNeeded(lqrParams);
 setInitialStateInBase(caseDef.x0);
 assignPulseVariables(caseDef);
 
@@ -83,6 +93,69 @@ end
 function setInitialStateInBase(x0)
 assignin("base", "studyInitialState", x0(:));
 evalin("base", "set_initial_base_state(studyInitialState); clear studyInitialState");
+end
+
+function applyLimitParamsIfNeeded(limitParams)
+if isempty(limitParams)
+    return;
+end
+
+if isnumeric(limitParams) && isscalar(limitParams)
+    limitParams = struct( ...
+        "tauScale", double(limitParams), ...
+        "forceScale", double(limitParams), ...
+        "momentScale", double(limitParams));
+end
+
+tauScale = getFieldOrDefault(limitParams, "tauScale", 1.0);
+forceScale = getFieldOrDefault(limitParams, "forceScale", 1.0);
+momentScale = getFieldOrDefault(limitParams, "momentScale", 1.0);
+
+if tauScale <= 0 || forceScale <= 0 || momentScale <= 0
+    error("run_cases:InvalidLimitScale", ...
+        "Limit scales must be positive.");
+end
+
+ctrl = evalin("base", "ctrl");
+base = evalin("base", "base");
+hip = evalin("base", "hip");
+
+ctrl.tauMax = ctrl.tauMax(:) * tauScale;
+hip.forceMax = hip.forceMax(:) * forceScale;
+base.forceMax = base.forceMax(:) * forceScale;
+base.momentMax = base.momentMax * momentScale;
+
+baseLqr = floating_base_lqr_design(base);
+base.command = @(x) floating_base_lqr_command(x, baseLqr);
+
+assignin("base", "ctrl", ctrl);
+assignin("base", "hip", hip);
+assignin("base", "base", base);
+assignin("base", "baseLqr", baseLqr);
+end
+
+function applyLqrParamsIfNeeded(lqrParams)
+if isempty(lqrParams)
+    return;
+end
+
+requiredFields = ["Q", "R"];
+for idx = 1:numel(requiredFields)
+    if ~isfield(lqrParams, char(requiredFields(idx)))
+        error("run_cases:InvalidLqrParams", ...
+            "lqrParams must contain fields Q and R.");
+    end
+end
+
+assignin("base", "studyLqrParams", lqrParams);
+cmd = [ ...
+    'base.Q = studyLqrParams.Q;' ...
+    'base.R = studyLqrParams.R;' ...
+    'baseLqr = floating_base_lqr_design(base);' ...
+    'base.command = @(x) floating_base_lqr_command(x, baseLqr);' ...
+    'clear studyLqrParams;' ...
+    ];
+evalin("base", cmd);
 end
 
 function matlabState = configureHeadlessMatlab()
@@ -280,6 +353,14 @@ if any(inWindow)
     value = max(abs(data(inWindow, :)), [], "all");
 else
     value = NaN;
+end
+end
+
+function value = getFieldOrDefault(s, name, defaultValue)
+if isfield(s, name)
+    value = s.(name);
+else
+    value = defaultValue;
 end
 end
 

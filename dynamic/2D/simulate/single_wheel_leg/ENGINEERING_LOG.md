@@ -752,3 +752,252 @@ D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
 - The study runner has been updated to use
   `configure_discrete_controller_timing(false)`, `logsout` extraction, and the
   stage-1 `floating_base_leg_reference` metric convention.
+
+## 2026-08-06 LQR Q/R Bayesian Run
+
+Result directory:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr\20260806_203337
+```
+
+Summary report:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_lqr_qr_bayes_summary.md
+```
+
+Key result:
+
+- Best trial: `trial_0014`
+- Objective improved from about `57503.5` to `54903.9`, about `4.5%`.
+- Stable training cases remained `3 / 5`: 0 N and 5 N cases passed, 10 N
+  cases still failed.
+- Best parameter trend: make `FHz` more expensive and `MBy` cheaper in the
+  upper-layer LQR `R`; do not treat this as final tuning yet.
+
+Next action:
+
+- Validate `trial_0014` on the full 9-case stage-A acceptance set before
+  changing default `startup.m` parameters.
+- Validation helper added:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+out = validate_best_qr_9cases("D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr\20260806_203337");
+```
+
+This calls `run_cases(cases, bestParams)`, so the saved LQR `Q/R` is reapplied
+after each per-case `startup`.
+
+Validation completed:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260806_220040
+```
+
+Validation conclusion:
+
+- Full 9-case result stayed at `6 / 9` stable.
+- All `0 N` and `5 N` cases still passed.
+- All `10 N` cases still failed.
+- `pitch_10deg_pulse_10N` improved strongly, but
+  `pitch_-10deg_pulse_10N` regressed badly.
+
+Updated next action:
+
+- Do not apply `trial_0014` to `startup.m`.
+- Run a second QR Bayesian round with symmetric 10 N training cases, including
+  `pitch_-10deg_pulse_10N`, and expanded `R_Fz` / `R_MBy` search ranges.
+
+## 2026-08-06 Limit-Scale Diagnostic
+
+Reason:
+
+- The 10 N pulse cases all reached `tauSaturationRatio = 1.0`.
+- Before treating 10 N as purely a QR/QP tuning problem, test whether the
+  current failure is mainly a control-authority limit.
+
+Helper:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+```
+
+Best QR with 2x upper/LQR and lower/QP limits:
+
+```matlab
+out = validate_limit_scale_9cases(2.0, "D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr\20260806_203337");
+```
+
+Default QR with 2x limits, useful as an isolation check:
+
+```matlab
+out = validate_limit_scale_9cases(2.0);
+```
+
+This helper applies, after each per-case `startup`:
+
+```text
+ctrl.tauMax     *= limitScale
+base.forceMax   *= limitScale
+hip.forceMax    *= limitScale
+base.momentMax  *= limitScale
+```
+
+It does not edit `startup.m` defaults.
+
+Completed best QR + 2x all-limits run:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260806_221550
+```
+
+Conclusion:
+
+- Stable count stayed at `6 / 9`.
+- All `10 N` cases still failed.
+- The 2x run still hit the new doubled LQR and torque limits.
+- `pitch_-10deg_pulse_10N` and `pitch_10deg_pulse_10N` became much worse.
+
+Interpretation:
+
+- Scaling all limits is not a clean actuator-only test, because it also lets
+  the upper LQR command become more aggressive.
+- The next cleaner diagnostic is to scale only lower torque limits:
+
+```matlab
+limits = struct("tauScale", 2.0, "forceScale", 1.0, "momentScale", 1.0);
+out = validate_limit_scale_9cases(limits, "D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr\20260806_203337");
+```
+
+## 2026-08-06 Recovery Transient Analysis
+
+User observation from animation:
+
+```text
+after the disturbance, the inverted pendulum leans and rolls forward;
+then pitch suddenly returns toward zero;
+after that the system diverges.
+```
+
+Offline analysis script:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+analysis = analyze_recovery_transient();
+```
+
+Outputs:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\data\processed\2026_08_recovery_transient_events.csv
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_recovery_transient_analysis.md
+D:\Workspace\CodeWorkspace\calibration\figures\studies\2026_08_lqr_disturbance_response\recovery_transient
+```
+
+Key result:
+
+- At pulse end (`t = 2.5 s`), theta is only about `11 deg` and dtheta is about
+  `0.20` to `0.32 rad/s`.
+- The dangerous phase is post-pulse recovery: upper LQR command reaches its
+  limit around `2.73` to `2.80 s`, theta crosses zero around `2.74` to
+  `2.79 s`, lower torque saturates around `2.84` to `2.88 s`, and then theta
+  exceeds the `15 deg` failure threshold.
+- The apparent pitch correction is a pass-through event with too much recovery
+  energy, not a settled recovery.
+
+Decision:
+
+- Stop enlarging all limits.
+- Next tuning should reduce recovery aggressiveness and add damping/shape:
+  increase effective dtheta damping relative to theta stiffness, constrain
+  sudden LQR wrench changes, keep x/dx from accumulating, then revisit QP
+  priorities if torque saturation still follows.
+
+## 2026-08-06 Round-2 QR Experiment
+
+Prepared experiment:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\experiments\single_wheel_leg_lqr_qr_round2
+```
+
+Purpose:
+
+- Keep the plant, QP, contact, limits, and stage-1 reference fixed.
+- Tune only upper-layer floating-base LQR `Q/R`.
+- Use symmetric 10 N pressure cases so the optimizer cannot improve positive
+  pitch recovery while regressing negative pitch recovery.
+- Add recovery-aware scoring terms so theta returning through zero with high
+  angular velocity is penalized.
+
+Training cases:
+
+```text
+pitch_0deg_pulse_0N
+pitch_-10deg_pulse_5N
+pitch_10deg_pulse_5N
+pitch_-10deg_pulse_10N
+pitch_0deg_pulse_10N
+pitch_10deg_pulse_10N
+```
+
+New score terms:
+
+```text
+postPulsePeakAbsDtheta
+thetaZeroDtheta
+recoveryTauSaturationRatio
+recoveryULqrSaturationRatio
+```
+
+Run order:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\experiments\single_wheel_leg_lqr_qr_round2
+score = run_smoke_test;
+score = run_default_qr_check;
+
+cd D:\Workspace\CodeWorkspace\calibration
+out = run_bayes_calibration("single_wheel_leg_lqr_qr_round2");
+```
+
+Static check:
+
+```text
+experiment_config.m, qr_training_cases.m, run_trial.m, score_trial.m,
+run_smoke_test.m, and run_default_qr_check.m all pass MATLAB checkcode.
+```
+
+Round-2 result:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr_round2\20260806_224811
+```
+
+Summary report:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_lqr_qr_round2_summary.md
+```
+
+Key outcome:
+
+- Best trial: `trial_0005`
+- Objective improved from about `77830.7` to `69145.0`, about `11.2%`.
+- Stable training cases stayed at `3 / 6`; no 10 N case passed in any of the
+  24 trials.
+- Best multipliers: `R_Fz ~= 14.7x`, `Q_dx ~= 3.4x`, `R_MBy ~= 0.61x`.
+- Round 2 greatly reduced the `-10 deg` and `0 deg` 10 N failure severity, but
+  `+10 deg` 10 N remains poor.
+
+Next action:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+out = validate_best_qr_9cases("D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr_round2\20260806_224811");
+```
+
+If full validation remains `6 / 9`, stop blind QR expansion and move to
+recovery shaping or QP priority tuning.
