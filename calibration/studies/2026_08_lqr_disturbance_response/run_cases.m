@@ -156,6 +156,16 @@ cmd = [ ...
     'clear studyLqrParams;' ...
     ];
 evalin("base", cmd);
+
+if isfield(lqrParams, "commandShaping")
+    base = evalin("base", "base");
+    baseLqr = evalin("base", "baseLqr");
+    base.commandShaping = lqrParams.commandShaping;
+    baseLqr.commandShaping = lqrParams.commandShaping;
+    base.command = @(x) floating_base_lqr_command(x, baseLqr);
+    assignin("base", "base", base);
+    assignin("base", "baseLqr", baseLqr);
+end
 end
 
 function matlabState = configureHeadlessMatlab()

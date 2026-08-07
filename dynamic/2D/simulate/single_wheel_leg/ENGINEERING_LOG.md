@@ -1001,3 +1001,300 @@ out = validate_best_qr_9cases("D:\Workspace\CodeWorkspace\calibration\results\si
 
 If full validation remains `6 / 9`, stop blind QR expansion and move to
 recovery shaping or QP priority tuning.
+
+Full 9-case validation completed:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260807_182335
+```
+
+Validation result:
+
+- Round-2 best stayed at `6 / 9` stable.
+- All `0 N` and `5 N` cases passed.
+- All `10 N` cases failed.
+- 0 N / 5 N guardrails remain acceptable, with mild increases in x drift,
+  torque usage, and leg velocity RMS compared with the default QR.
+- `pitch_-10deg_pulse_10N` and `pitch_0deg_pulse_10N` are much improved.
+- `pitch_10deg_pulse_10N` is worse than round-1 best, though still better than
+  default.
+
+Decision:
+
+- Do not continue blind QR expansion.
+- Do not write round-2 best Q/R into `startup.m` as a final default.
+- Move next to recovery shaping or QP-priority analysis:
+
+```text
+LQR wrench slew/rate limiting or filtering
+post-pulse effective damping
+QP moment tracking versus q/ddq tracking priority during recovery
+```
+
+## 2026-08-07 QP Recovery Tracking Analysis
+
+Offline analysis script:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+analysis = analyze_qp_recovery_tracking();
+```
+
+Outputs:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\data\processed\2026_08_qp_recovery_tracking.csv
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_qp_recovery_tracking.md
+D:\Workspace\CodeWorkspace\calibration\figures\studies\2026_08_lqr_disturbance_response\qp_recovery_tracking
+```
+
+Key result:
+
+- For round-2 best, `pitch_-10deg_pulse_10N` and
+  `pitch_0deg_pulse_10N` have very small `MBy_des -> tau_h` tracking error
+  during the 0.5 s post-pulse recovery window:
+  `recoveryRmsTauHError ~= 0.015 N*m`.
+- In those cases, `MBy_des` and `tau_h` do not saturate; the remaining upper
+  saturation is mainly `FHx_ext`.
+- For round-2 best:
+
+```text
+pitch_-10deg_pulse_10N:
+  max |FHx_ext| ~= 140 N
+  max |FHz_ext| ~= 75 N
+  max |MBy_des| ~= 3.6 N*m
+  FHx saturation fraction ~= 0.61
+
+pitch_0deg_pulse_10N:
+  max |FHx_ext| ~= 140 N
+  max |FHz_ext| ~= 75 N
+  max |MBy_des| ~= 3.8 N*m
+  FHx saturation fraction ~= 0.62
+
+pitch_10deg_pulse_10N:
+  max |FHx_ext| ~= 140 N
+  max |FHz_ext| ~= 140 N
+  max |MBy_des| ~= 160 N*m
+  recoveryDqErrorRms ~= 36.8 rad/s
+```
+
+Decision:
+
+- Do not treat lower QP pitch moment tracking as the primary bottleneck for
+  the improved `-10 deg` and `0 deg` 10 N cases.
+- Next experiment should prioritize upper-layer wrench shaping, especially
+  `FHx_ext` rate limiting/filtering.
+- Keep QP priority tuning as a follow-up for `pitch_10deg_pulse_10N`, where all
+  upper channels saturate and leg tracking error is large.
+
+## 2026-08-07 Qx/Qdx Rollback Diagnostic
+
+Reason:
+
+- Round-2 best makes `FHx_ext` mainly driven by `dxB`.
+- Round-2 best has `Q_dx ~= 3.39x`, which can make horizontal velocity recovery
+  too aggressive.
+- Before adding `FHx_ext` filtering/rate limiting, test whether simply reducing
+  `Q_x/Q_dx` is enough.
+
+Helper:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+batch = validate_qx_qdx_rollback_9cases("D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr_round2\20260806_224811");
+```
+
+Default variants:
+
+```text
+qdx_2p0:
+  Q_x  = 0.60557x
+  Q_dx = 2.0x
+
+qdx_1p0:
+  Q_x  = 0.60557x
+  Q_dx = 1.0x
+
+qx_0p3_qdx_1p0:
+  Q_x  = 0.3x
+  Q_dx = 1.0x
+```
+
+All variants keep the other round-2 best `Q/R` entries unchanged and run the
+full 9-case stage-A validation. The batch writes a `rollback_index.csv` with
+stable count, 5 N guardrail metrics, and 10 N pressure-test severity.
+
+Rollback result:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\qx_qdx_rollback_20260807_190201
+```
+
+Summary report:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_qx_qdx_rollback_summary.md
+```
+
+Key outcome:
+
+- All variants stayed at `6 / 9` stable.
+- All `0 N` and `5 N` guardrail cases still passed.
+- All `10 N` pressure cases still failed.
+- `Q_dx = 2.0x` improved `pitch_10deg_pulse_10N` relative to round-2 best but
+  degraded `pitch_-10deg_pulse_10N` and `pitch_0deg_pulse_10N`.
+- `Q_dx = 1.0x` is too low and causes severe 10 N failures.
+- Lowering `Q_dx` reduces `FHx` saturation fraction but shifts recovery burden
+  into `FHz/MBy` or lets horizontal velocity drift into a worse region.
+
+Decision:
+
+- Do not use `Q_dx = 1.0x`.
+- Do not continue coarse `Q_x/Q_dx` rollback alone.
+- Next useful test is a narrower combined design:
+
+```text
+Q_dx between 2.5x and 3.4x
+plus mild FHx_ext output shaping
+```
+
+## 2026-08-07 FHx Output Shaping Diagnostic
+
+Implementation:
+
+- `floating_base_lqr_command.m` now supports optional output shaping through
+  `baseLqr.commandShaping`.
+- Default behavior is unchanged because shaping is disabled unless the
+  validation script passes `lqrParams.commandShaping`.
+- Current shaping is applied only to `FHx_ext`; `FHz_ext` and `MBy_des` are
+  left unchanged.
+
+Supported shaping parameters:
+
+```text
+commandShaping.enabled
+commandShaping.channels    % [FHx; FHz; MBy]
+commandShaping.filterTau   % first-order filter time constant, seconds
+commandShaping.rateLimit   % N/s for FHx when channels(1)=true
+```
+
+Helper:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+batch = validate_fhx_shaping_9cases("D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr_round2\20260806_224811");
+```
+
+Default variants:
+
+```text
+fhx_filter_30ms:
+  round-2 best Q/R
+  FHx_ext first-order filter, tau = 0.030 s
+
+fhx_rate_2000:
+  round-2 best Q/R
+  FHx_ext rate limit = 2000 N/s
+
+qdx_2p5_fhx_filter_30ms:
+  Q_dx = 2.5x
+  FHx_ext first-order filter, tau = 0.030 s
+```
+
+The batch writes `fhx_shaping_index.csv` plus one full 9-case result directory
+per variant. Use it to compare 5 N guardrail stability and 10 N pressure-test
+severity against round-2 best and the Qx/Qdx rollback runs.
+
+First FHx shaping batch:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\fhx_shaping_20260807_191943
+```
+
+Status:
+
+- Invalid for judging shaping.
+- `fhx_filter_30ms` and `fhx_rate_2000` produced exactly the same `uLqr` signal
+  as round-2 best.
+- Cause: `set_initial_base_state` rebuilt `baseLqr` per case, and
+  `floating_base_lqr_design` did not preserve `base.commandShaping`.
+
+Fix:
+
+- `floating_base_lqr_design.m` now copies `base.commandShaping` into
+  `baseLqr.commandShaping`.
+- Verified that shaping survives `set_initial_base_state`.
+
+Report:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_fhx_shaping_batch_note.md
+```
+
+Action:
+
+- Re-run `validate_fhx_shaping_9cases(...)`.
+- Only the new post-fix batch should be used to judge FHx filtering/rate
+  limiting.
+
+Post-fix FHx shaping batch:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\fhx_shaping_20260807_195550
+```
+
+Outcome:
+
+- All three variants remain `6 / 9` stable.
+- All `0 N` and `5 N` guardrail cases still pass.
+- All `10 N` pressure cases still fail.
+- `fhx_filter_30ms` improves the positive-pitch 10 N case relative to round-2
+  best, but it worsens the negative-pitch and zero-pitch 10 N cases.
+- `fhx_rate_2000` helps the zero-pitch 10 N case slightly, but worsens the
+  negative-pitch and positive-pitch 10 N cases.
+- `qdx_2p5_fhx_filter_30ms` is not useful; 10 N failures become severe.
+
+Recovery-event comparison:
+
+```text
+round2_best:
+  dtheta at theta zero ~= -1.7 to -2.0 rad/s
+
+fhx_filter_30ms:
+  dtheta at theta zero ~= -3.0 rad/s
+
+qdx_2p5_fhx_filter_30ms:
+  dtheta at theta zero ~= -2.6 to -2.7 rad/s
+```
+
+Decision:
+
+- Do not adopt fixed FHx filtering/rate limiting as the next baseline.
+- Do not continue coarse `Q_dx` rollback plus fixed FHx filtering.
+- Next diagnostic should test smaller upper `Fx/Fz` limits. The normal
+  `0 N / 5 N` envelope does not need the current large force authority, and the
+  10 N failures look like excessive recovery energy rather than insufficient
+  command smoothness.
+
+Prepared helper:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+batch = validate_force_limit_grid_9cases("D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr_round2\20260806_224811");
+```
+
+Default variants:
+
+```text
+forceScale = 0.8, tauScale = 1.0, momentScale = 1.0
+forceScale = 0.6, tauScale = 1.0, momentScale = 1.0
+forceScale = 0.4, tauScale = 1.0, momentScale = 1.0
+forceScale = 0.6, tauScale = 0.8, momentScale = 1.0
+```
+
+Note:
+
+- Smaller `Fx/Fz` limits reduce overly aggressive or infeasible force requests,
+  but they do not guarantee perfect lower-layer realization. QP realization
+  still depends on leg configuration, contact, joint torque limits, and the
+  unchanged pitch-moment target.

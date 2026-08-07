@@ -197,3 +197,93 @@ theta0 within +/-10 deg
 5 N pulse for 0.5 s passes
 10 N pulse exposes recovery-transient failure
 ```
+
+## Full 9-Case Validation
+
+Validation result directory:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260807_182335
+```
+
+Source best-QR result:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr_round2\20260806_224811
+```
+
+Result:
+
+```text
+default QR:      6 / 9 stable
+round-1 best QR: 6 / 9 stable
+round-2 best QR: 6 / 9 stable
+```
+
+The pass/fail envelope did not expand. The same cases pass and fail:
+
+```text
+0 N cases passed
+5 N cases passed
+10 N cases failed
+```
+
+Round-2 0 N / 5 N guardrail status:
+
+```text
+max final |theta| ~= 0.120 deg
+max tauSaturationRatio ~= 0.078
+max |finalX| ~= 0.083 m
+max legVelocityRms ~= 0.264 rad/s
+```
+
+Compared with the default QR, the 0 N / 5 N cases still pass but have slightly
+larger x drift, torque usage, and leg velocity RMS.
+
+10 N comparison:
+
+```text
+pitch_-10deg_pulse_10N:
+  default final theta ~= 1577 deg
+  round-1 final theta ~= -3596 deg
+  round-2 final theta ~= -16.1 deg
+  round-2 is much better, but still failed
+
+pitch_0deg_pulse_10N:
+  default final theta ~= -598 deg
+  round-1 final theta ~= -88.1 deg
+  round-2 final theta ~= -44.3 deg
+  round-2 is best so far, but still failed
+
+pitch_10deg_pulse_10N:
+  default final theta ~= -1172 deg
+  round-1 final theta ~= 9.08 deg
+  round-2 final theta ~= -196 deg
+  round-1 was best for this specific positive-pitch case
+```
+
+Interpretation:
+
+```text
+Round 2 improved symmetry and reduced two catastrophic 10 N failures, but it
+did not make the 10 N pressure cases stable. Pure upper-layer QR tuning has
+now produced useful shaping evidence but has not changed the working envelope.
+```
+
+Decision:
+
+```text
+Do not continue blind QR expansion.
+Do not write round-2 best Q/R into startup.m as final default.
+Move next to recovery shaping or QP-priority analysis.
+```
+
+Recommended next technical target:
+
+```text
+Add a controlled recovery-shaping experiment:
+  1. keep 5 N guardrail cases
+  2. use 10 N cases only as pressure tests
+  3. test LQR wrench slew/rate limiting or first-order filtering
+  4. inspect whether QP moment tracking is being sacrificed during recovery
+```
