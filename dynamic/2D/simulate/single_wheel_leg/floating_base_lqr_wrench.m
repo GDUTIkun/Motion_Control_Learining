@@ -24,7 +24,9 @@ else
         "Expected x = [t;x;z;theta;dx;dz;dtheta] or 6-state vector.");
 end
 
-uBody = baseLqr.model.uEq - baseLqr.K * (X - baseLqr.xRef(:));
+[xRef, aRef] = floating_base_reference(t, baseLqr);
+uBody = feedforwardWrench(aRef, baseLqr.model) ...
+    - baseLqr.K * (X - xRef);
 thetaKi = getFieldOrDefault(baseLqr, "thetaIntegralGain", 0);
 if thetaKi ~= 0 && numel(x) == 7
     if isempty(thetaIntegral) || isempty(lastT) || t <= 0 || t < lastT
@@ -32,7 +34,7 @@ if thetaKi ~= 0 && numel(x) == 7
         lastT = t;
     else
         dt = max(0, t - lastT);
-        thetaIntegral = thetaIntegral + (X(3) - baseLqr.xRef(3)) * dt;
+        thetaIntegral = thetaIntegral + (X(3) - xRef(3)) * dt;
         thetaLimit = getFieldOrDefault(baseLqr, "thetaIntegralLimit", inf);
         thetaIntegral = min(max(thetaIntegral, -thetaLimit), thetaLimit);
         lastT = t;
@@ -48,6 +50,14 @@ uBody(1:2) = min(max(uBody(1:2), -forceMax), forceMax);
 uBody(3) = min(max(uBody(3), -baseLqr.momentMax), baseLqr.momentMax);
 
 y = uBody(:);
+end
+
+function u = feedforwardWrench(aRef, model)
+FHx = model.m * aRef(1);
+FHz = model.m * (model.g + aRef(2));
+MBy = model.Iyy * aRef(3) ...
+    - model.rHEq(1) * FHz + model.rHEq(2) * FHx;
+u = [FHx; FHz; MBy];
 end
 
 function value = getFieldOrDefault(s, name, defaultValue)

@@ -1,0 +1,7 @@
+variant,goodCount,stableCount,branchOkCount,good8N,good8p5N,good9N,maxTheta8p5N,maxTheta9N,maxAbsPOx,minAbsSinQk,maxLegDqErr,maxTauSat,resultDir
+force_0p8_pd_1p5_wqdd_leg_3x,0,0,0,0,0,0,32557.1367333995,15015.0057557847,0.699945686949466,0.000248958731508792,21804.3392386371,1,D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260808_075300
+wqdd_leg_3x,0,0,0,0,0,0,31951.5861371913,28678.7977722551,0.699956680393214,0.000315465467885035,29667.1882441208,1,D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260808_074047
+force_0p8_wqdd_leg_3x,0,0,0,0,0,0,24165.8176425492,45130.2858949129,0.699916142276661,0.000155203178948664,37060.8364900484,1,D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260808_074702
+round2_baseline,0,0,0,0,0,0,51566.5207909851,45963.8967845786,0.699946224687715,1.75242165950188e-05,50290.7073180304,1,D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260808_073645
+force_0p8,0,0,0,0,0,0,7111.44256945247,53409.666657557,0.699977982092926,3.65251383589274e-06,16089.3835283802,1,D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260808_073850
+force_0p8_tau_1p2_wqdd_leg_3x,0,0,0,0,0,0,15019.2103180681,NaN,0.699802683004541,0.000290596023112804,28534.6629898762,1,D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\20260808_075922

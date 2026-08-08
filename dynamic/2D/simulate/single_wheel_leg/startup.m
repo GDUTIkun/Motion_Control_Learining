@@ -167,6 +167,16 @@ base.forceMax = hip.forceMax(:);
 base.momentMax = ctrl.tauMax(1);
 base.thetaIntegralGain = 80;
 base.thetaIntegralLimit = 0.5;
+% Horizontal constant-speed comparison: forward, stop, then reverse home.
+base.trajectory = struct();
+base.trajectory.enabled = true;
+base.trajectory.mode = "velocity_round_trip";
+base.trajectory.settleTime = 1.0;
+base.trajectory.cruiseVelocity = 0.5;
+base.trajectory.accelDuration = 0.5;
+base.trajectory.cruiseDuration = 1.5;
+base.trajectory.decelDuration = 0.5;
+base.trajectory.turnHoldDuration = 0.5;
 
 baseLqr = floating_base_lqr_design(base);
 base.command = @(x) floating_base_lqr_command(x, baseLqr);

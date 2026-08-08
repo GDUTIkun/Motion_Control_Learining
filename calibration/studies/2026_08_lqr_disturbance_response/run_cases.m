@@ -1,4 +1,4 @@
-function out = run_cases(cases, lqrParams, limitParams)
+function out = run_cases(cases, lqrParams, limitParams, ctrlParams)
 %RUN_CASES Run the LQR + QP disturbance-response study cases.
 
 if nargin < 1 || isempty(cases)
@@ -9,6 +9,9 @@ if nargin < 2
 end
 if nargin < 3
     limitParams = [];
+end
+if nargin < 4
+    ctrlParams = [];
 end
 
 studyDir = fileparts(mfilename("fullpath"));
@@ -27,11 +30,19 @@ out.simDir = simDir;
 out.resultDir = resultDir;
 out.lqrParams = lqrParams;
 out.limitParams = limitParams;
+out.ctrlParams = ctrlParams;
 out.cases = repmat(struct("case", [], "signals", [], "metrics", []), numel(cases), 1);
 
 for idx = 1:numel(cases)
     fprintf("\nRunning case %d/%d: %s\n", idx, numel(cases), cases(idx).name);
-    caseResult = runOneCase(cases(idx), simDir, lqrParams, limitParams);
+    try
+        caseResult = runOneCase(cases(idx), simDir, lqrParams, limitParams, ctrlParams);
+    catch err
+        warning("run_cases:CaseSimulationFailed", ...
+            "Case %s failed and will be recorded as unstable.\n%s", ...
+            cases(idx).name, err.message);
+        caseResult = makeFailedCaseResult(cases(idx), err);
+    end
     out.cases(idx) = caseResult;
     save(fullfile(resultDir, sprintf("%s.mat", safeFileStem(cases(idx).name))), ...
         "caseResult");
@@ -46,7 +57,7 @@ fprintf("\nSaved study results to:\n%s\n", resultDir);
 disp(summary);
 end
 
-function caseResult = runOneCase(caseDef, simDir, lqrParams, limitParams)
+function caseResult = runOneCase(caseDef, simDir, lqrParams, limitParams, ctrlParams)
 caseTimer = tic;
 originalDir = pwd;
 cleanup = onCleanup(@() cd(originalDir));
@@ -58,6 +69,7 @@ matlabCleanup = onCleanup(@() restoreHeadlessMatlab(matlabState));
 runScriptInBase(fullfile(simDir, "startup.m"));
 applyLimitParamsIfNeeded(limitParams);
 applyLqrParamsIfNeeded(lqrParams);
+applyCtrlParamsIfNeeded(ctrlParams);
 setInitialStateInBase(caseDef.x0);
 assignPulseVariables(caseDef);
 
@@ -81,6 +93,109 @@ caseResult = struct();
 caseResult.case = caseDef;
 caseResult.signals = signals;
 caseResult.metrics = metrics;
+end
+
+function caseResult = makeFailedCaseResult(caseDef, err)
+metrics = failedMetrics(err);
+caseResult = struct();
+caseResult.case = caseDef;
+caseResult.signals = struct();
+caseResult.metrics = metrics;
+end
+
+function metrics = failedMetrics(err)
+metrics = struct();
+metrics.maxAbsTheta = NaN;
+metrics.thetaRms = NaN;
+metrics.finalTheta = NaN;
+metrics.dthetaRms = NaN;
+metrics.finalDtheta = NaN;
+metrics.finalX = NaN;
+metrics.finalDx = NaN;
+metrics.maxAbsX = NaN;
+metrics.settlingTimeTheta = NaN;
+metrics.maxAbsTauH = NaN;
+metrics.maxAbsTauK = NaN;
+metrics.maxAbsTauW = NaN;
+metrics.tauSaturationRatio = NaN;
+metrics.uLqrSaturationRatio = NaN;
+metrics.legPositionRms = NaN;
+metrics.legVelocityRms = NaN;
+metrics.legBranchOk = false;
+metrics.minAbsSinQkPost = NaN;
+metrics.minAbsDetJPost = NaN;
+metrics.minQkDegPost = NaN;
+metrics.maxQkDegPost = NaN;
+metrics.finalQkDeg = NaN;
+metrics.maxAbsPOxPost = NaN;
+metrics.finalPOx = NaN;
+metrics.maxLegQErrorPost = NaN;
+metrics.maxLegDqErrorPost = NaN;
+metrics.pulseMaxAbsTheta = NaN;
+metrics.pulseMaxAbsTau = NaN;
+metrics.pulseMaxAbsULqr = NaN;
+metrics.elapsedSeconds = NaN;
+metrics.stable = false;
+metrics.failureReason = "simulation error: " + compactErrorMessage(err.message);
+metrics.simErrorIdentifier = string(err.identifier);
+end
+
+function text = compactErrorMessage(text)
+text = string(text);
+text = replace(text, newline, " ");
+maxChars = 240;
+if strlength(text) > maxChars
+    text = extractBefore(text, maxChars) + "...";
+end
+end
+
+function applyCtrlParamsIfNeeded(ctrlParams)
+if isempty(ctrlParams)
+    return;
+end
+
+ctrl = evalin("base", "ctrl");
+
+if isfield(ctrlParams, "KpScale")
+    scale = normalizeScale(ctrlParams.KpScale, 3, "KpScale");
+    ctrl.Kp = diag(scale) * ctrl.Kp;
+end
+if isfield(ctrlParams, "KdScale")
+    scale = normalizeScale(ctrlParams.KdScale, 3, "KdScale");
+    ctrl.Kd = diag(scale) * ctrl.Kd;
+end
+if isfield(ctrlParams, "qpWqddScale")
+    scale = normalizeScale(ctrlParams.qpWqddScale, 3, "qpWqddScale");
+    ctrl.qpWqdd = ctrl.qpWqdd(:) .* scale;
+end
+if isfield(ctrlParams, "qpWtauScale")
+    scale = normalizeScale(ctrlParams.qpWtauScale, 3, "qpWtauScale");
+    ctrl.qpWtau = ctrl.qpWtau(:) .* scale;
+end
+if isfield(ctrlParams, "qpWFcScale")
+    scale = normalizeScale(ctrlParams.qpWFcScale, 2, "qpWFcScale");
+    ctrl.qpWFc = ctrl.qpWFc(:) .* scale;
+end
+if isfield(ctrlParams, "constraintVelocityGainScale")
+    ctrl.constraintVelocityGain = ctrl.constraintVelocityGain ...
+        * double(ctrlParams.constraintVelocityGainScale);
+end
+if isfield(ctrlParams, "useFloatingHipAcceleration")
+    ctrl.useFloatingHipAcceleration = logical(ctrlParams.useFloatingHipAcceleration);
+end
+
+assignin("base", "ctrl", ctrl);
+end
+
+function scale = normalizeScale(value, n, fieldName)
+scale = double(value(:));
+if isscalar(scale)
+    scale = repmat(scale, n, 1);
+end
+if numel(scale) ~= n || any(~isfinite(scale)) || any(scale <= 0)
+    error("run_cases:InvalidCtrlScale", ...
+        "%s must be a positive scalar or %d-element vector.", fieldName, n);
+end
 end
 
 function assignPulseVariables(caseDef)
@@ -314,6 +429,7 @@ end
 function metrics = computeMetrics(signals, caseDef)
 ctrl = evalin("base", "ctrl");
 base = evalin("base", "base");
+leg = evalin("base", "leg");
 
 theta = signals.X(:, 3);
 dtheta = signals.X(:, 6);
@@ -341,6 +457,17 @@ metrics.uLqrSaturationRatio = max(abs(uLqr) ./ ...
     [base.forceMax(:).', base.momentMax], [], "all");
 metrics.legPositionRms = rms(signals.legQError, "all");
 metrics.legVelocityRms = rms(signals.legDqError, "all");
+[legMetrics, legBranchOk] = computeLegGeometryMetrics(signals, caseDef, leg);
+metrics.legBranchOk = legBranchOk;
+metrics.minAbsSinQkPost = legMetrics.minAbsSinQkPost;
+metrics.minAbsDetJPost = legMetrics.minAbsDetJPost;
+metrics.minQkDegPost = legMetrics.minQkDegPost;
+metrics.maxQkDegPost = legMetrics.maxQkDegPost;
+metrics.finalQkDeg = legMetrics.finalQkDeg;
+metrics.maxAbsPOxPost = legMetrics.maxAbsPOxPost;
+metrics.finalPOx = legMetrics.finalPOx;
+metrics.maxLegQErrorPost = legMetrics.maxLegQErrorPost;
+metrics.maxLegDqErrorPost = legMetrics.maxLegDqErrorPost;
 metrics.pulseMaxAbsTheta = NaN;
 metrics.pulseMaxAbsTau = NaN;
 metrics.pulseMaxAbsULqr = NaN;
@@ -355,6 +482,52 @@ if isfield(caseDef, "pulseWindow") && all(isfinite(caseDef.pulseWindow))
 end
 
 [metrics.stable, metrics.failureReason] = classifyStability(metrics);
+end
+
+function [legMetrics, legBranchOk] = computeLegGeometryMetrics(signals, caseDef, leg)
+t = signals.time(:);
+theta = signals.X(:, 3);
+dtheta = signals.X(:, 6);
+qRel = signals.qRel;
+dqRel = signals.dqRel;
+qAbs = [qRel(:, 1) + theta, qRel(:, 2), qRel(:, 3)];
+dqAbs = [dqRel(:, 1) + dtheta, dqRel(:, 2), dqRel(:, 3)];
+
+n = numel(t);
+pOx = zeros(n, 1);
+detJO = zeros(n, 1);
+for idx = 1:n
+    kin = wheel_leg_kinematics(qAbs(idx, :).', dqAbs(idx, :).', ...
+        zeros(3, 1), leg);
+    pOx(idx) = kin.pO(1);
+    detJO(idx) = det(kin.JO(:, 1:2));
+end
+
+if isfield(caseDef, "pulseWindow") && all(isfinite(caseDef.pulseWindow))
+    post = t >= caseDef.pulseWindow(2);
+else
+    post = true(size(t));
+end
+
+qkDeg = rad2deg(qAbs(:, 2));
+qErrNorm = vecnorm(signals.legQError, 2, 2);
+dqErrNorm = vecnorm(signals.legDqError, 2, 2);
+
+legMetrics = struct();
+legMetrics.minAbsSinQkPost = min(abs(sin(qAbs(post, 2))));
+legMetrics.minAbsDetJPost = min(abs(detJO(post)));
+legMetrics.minQkDegPost = min(qkDeg(post));
+legMetrics.maxQkDegPost = max(qkDeg(post));
+legMetrics.finalQkDeg = qkDeg(end);
+legMetrics.maxAbsPOxPost = max(abs(pOx(post)));
+legMetrics.finalPOx = pOx(end);
+legMetrics.maxLegQErrorPost = max(qErrNorm(post));
+legMetrics.maxLegDqErrorPost = max(dqErrNorm(post));
+
+legBranchOk = legMetrics.minAbsSinQkPost > sind(5) ...
+    && legMetrics.minQkDegPost > 5 ...
+    && legMetrics.maxQkDegPost < 120 ...
+    && legMetrics.maxAbsPOxPost < 0.25;
 end
 
 function value = windowMaxAbs(t, data, window)
@@ -431,6 +604,16 @@ settlingTimeTheta = zeros(n, 1);
 tauSaturationRatio = zeros(n, 1);
 legPositionRms = zeros(n, 1);
 legVelocityRms = zeros(n, 1);
+legBranchOk = false(n, 1);
+minAbsSinQkPost = zeros(n, 1);
+minAbsDetJPost = zeros(n, 1);
+minQkDegPost = zeros(n, 1);
+maxQkDegPost = zeros(n, 1);
+finalQkDeg = zeros(n, 1);
+maxAbsPOxPost = zeros(n, 1);
+finalPOx = zeros(n, 1);
+maxLegQErrorPost = zeros(n, 1);
+maxLegDqErrorPost = zeros(n, 1);
 pulseMaxAbsThetaDeg = NaN(n, 1);
 pulseMaxAbsTau = NaN(n, 1);
 pulseMaxAbsULqr = NaN(n, 1);
@@ -452,6 +635,16 @@ for idx = 1:n
     tauSaturationRatio(idx) = m.tauSaturationRatio;
     legPositionRms(idx) = m.legPositionRms;
     legVelocityRms(idx) = m.legVelocityRms;
+    legBranchOk(idx) = m.legBranchOk;
+    minAbsSinQkPost(idx) = m.minAbsSinQkPost;
+    minAbsDetJPost(idx) = m.minAbsDetJPost;
+    minQkDegPost(idx) = m.minQkDegPost;
+    maxQkDegPost(idx) = m.maxQkDegPost;
+    finalQkDeg(idx) = m.finalQkDeg;
+    maxAbsPOxPost(idx) = m.maxAbsPOxPost;
+    finalPOx(idx) = m.finalPOx;
+    maxLegQErrorPost(idx) = m.maxLegQErrorPost;
+    maxLegDqErrorPost(idx) = m.maxLegDqErrorPost;
     pulseMaxAbsThetaDeg(idx) = rad2deg(m.pulseMaxAbsTheta);
     pulseMaxAbsTau(idx) = m.pulseMaxAbsTau;
     pulseMaxAbsULqr(idx) = m.pulseMaxAbsULqr;
@@ -463,7 +656,10 @@ end
 summary = table(names, initialPitchDeg, pulseAmplitudeN, stable, ...
     failureReason, maxAbsThetaDeg, finalThetaDeg, finalDtheta, finalX, ...
     settlingTimeTheta, tauSaturationRatio, legPositionRms, legVelocityRms, ...
-    pulseMaxAbsThetaDeg, pulseMaxAbsTau, pulseMaxAbsULqr, elapsedSeconds);
+    legBranchOk, minAbsSinQkPost, minAbsDetJPost, minQkDegPost, ...
+    maxQkDegPost, finalQkDeg, maxAbsPOxPost, finalPOx, ...
+    maxLegQErrorPost, maxLegDqErrorPost, pulseMaxAbsThetaDeg, ...
+    pulseMaxAbsTau, pulseMaxAbsULqr, elapsedSeconds);
 end
 
 function resultDir = makeResultDir(calibrationDir)

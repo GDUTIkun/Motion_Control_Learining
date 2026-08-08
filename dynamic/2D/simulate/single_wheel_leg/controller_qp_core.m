@@ -15,7 +15,7 @@ x = double(x(:));
 t = x(1);
 [q, dq, FH_ext, MBy_des, vH, aH] = parseControllerInput(x);
 
-[qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg);
+[qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg, aH);
 qddCmd = ddqd + ctrl.Kd * (dqd - dq) + ctrl.Kp * (qd - q);
 
 [M, C, G] = wheel_leg_dynamics(q, dq, leg);
@@ -114,11 +114,11 @@ debug.MBy_des = MBy_des;
 debug.tauRef = tauRef(:);
 end
 
-function [qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg)
+function [qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg, aH)
 if numel(x) == 16
     base = evalin("base", "base");
     [qd, dqd, ddqd] = floating_base_leg_reference(t, x(2:7), ...
-        traj, leg, base);
+        traj, leg, base, aH);
 else
     [qd, dqd, ddqd] = wheel_leg_reference(t, traj, leg);
 end

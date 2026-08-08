@@ -57,6 +57,7 @@ baseLqr.momentMax = getFieldOrDefault(base, "momentMax", inf);
 baseLqr.thetaIntegralGain = getFieldOrDefault(base, "thetaIntegralGain", 0);
 baseLqr.thetaIntegralLimit = getFieldOrDefault(base, "thetaIntegralLimit", inf);
 baseLqr.commandShaping = getFieldOrDefault(base, "commandShaping", struct());
+baseLqr.trajectory = getFieldOrDefault(base, "trajectory", struct());
 baseLqr.xRef = getFieldOrDefault(base, "xRef", model.xEq);
 baseLqr.xRef = baseLqr.xRef(:);
 end

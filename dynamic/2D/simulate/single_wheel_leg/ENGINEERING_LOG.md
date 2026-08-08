@@ -1298,3 +1298,311 @@ Note:
   but they do not guarantee perfect lower-layer realization. QP realization
   still depends on leg configuration, contact, joint torque limits, and the
   unchanged pitch-moment target.
+
+## 2026-08-08 Boundary Failure: Leg Branch / Singularity
+
+User observation:
+
+- `8 N` pulse can recover.
+- `8.5 N` is near the boundary: pitch oscillates heavily and may eventually
+  settle, but the leg can end on the opposite side.
+- `9 N` loses balance.
+- Animation shows pitch rapidly returning upright, then the thigh/shank are
+  dragged toward a near-singular or opposite-branch configuration.
+
+Interpretation:
+
+- The current failure is no longer just "upper LQR output too large" or
+  "lower QP cannot track moment".
+- The dangerous event is recovery-phase coupling:
+
+```text
+pitch recovery -> large hip/thigh motion -> leg approaches singular/branch
+change -> QP/contact cannot preserve the intended stage-1 leg geometry
+```
+
+- Stage-1 IK asks the wheel center to remain near the hip vertical line, but
+  the actual dynamics do not contain a hard constraint that keeps the leg on
+  the same IK branch.
+- The two-link wheel-center Jacobian determinant is proportional to
+  `sin(qk)`, so `qk ~= 0 deg` or `qk ~= 180 deg` is singular. The nominal
+  stance is `qk ~= 38 deg`; large recovery transients can push the actual leg
+  too close to the singular set or to an unintended branch.
+
+Prepared diagnostics:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+analysis = analyze_leg_branch_geometry(resultDirs, labels, caseNames);
+```
+
+This reads existing `.mat` files and extracts:
+
+```text
+minAbsSinQkPost
+minAbsDetJPost
+minQkDegPost / maxQkDegPost / finalQkDeg
+pOxMinPost / pOxMaxPost / pOxFinal
+post-pulse q/dq tracking errors
+```
+
+Prepared boundary experiment:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_lqr_disturbance_response
+batch = validate_boundary_guard_grid("D:\Workspace\CodeWorkspace\calibration\results\single_wheel_leg_lqr_qr_round2\20260806_224811");
+```
+
+Default cases:
+
+```text
+theta0 = [-10, 0, 10] deg
+pulse  = [8, 8.5, 9] N
+stop   = 8 s
+```
+
+Default variants:
+
+```text
+round2_baseline
+force_0p8
+wqdd_leg_3x
+force_0p8_wqdd_leg_3x
+force_0p8_pd_1p5_wqdd_leg_3x
+force_0p8_tau_1p2_wqdd_leg_3x
+```
+
+The batch writes `boundary_guard_grid_index.csv`. The summary now includes
+leg-geometry metrics such as `legBranchOk`, `minAbsSinQkPost`,
+`maxAbsPOxPost`, and post-pulse max q/dq error.
+
+Post-run analysis helper:
+
+```matlab
+analysis = analyze_boundary_guard_batch(batch.batchDir);
+```
+
+Decision logic:
+
+- A candidate is useful only if it preserves the original stability criteria
+  and keeps `legBranchOk` true.
+- If stronger QP leg tracking improves branch health, the next controller
+  change should be a formal QP posture/branch priority.
+- If reducing `Fx/Fz` helps but branch health is still poor, use force authority
+  reduction as a guardrail but still add leg configuration protection.
+- If mild extra torque helps only when paired with stronger QP tracking, the
+  previous torque limit was constraining the lower layer during recovery.
+
+Batch robustness note:
+
+- A boundary case may terminate Simulink with a solver/min-step or non-finite
+  derivative error near the end of the 8 s run. One observed error occurred at
+  about `t = 7.9718 s` in `source/PD_only/Planar Joint` for state `Px.v`.
+- This is a valid unstable failure mode for the boundary study, not a reason
+  to discard the full batch.
+- `run_cases.m` now catches per-case simulation errors, records that case as
+  `stable = false` with `failureReason = "simulation error: ..."`, saves the
+  case result, and continues with the remaining cases.
+
+Boundary batch result:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_lqr_disturbance_response\boundary_guard_grid_20260808_073645
+```
+
+Post-run summary:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_boundary_guard_grid_summary.md
+```
+
+Outcome:
+
+```text
+round2_baseline:                       stable 0 / 9, branchOk 0 / 9
+force_0p8:                             stable 0 / 9, branchOk 0 / 9
+wqdd_leg_3x:                           stable 0 / 9, branchOk 0 / 9
+force_0p8_wqdd_leg_3x:                 stable 0 / 9, branchOk 0 / 9
+force_0p8_pd_1p5_wqdd_leg_3x:          stable 0 / 9, branchOk 0 / 9
+force_0p8_tau_1p2_wqdd_leg_3x:         stable 0 / 9, branchOk 0 / 9
+```
+
+Common geometric signature:
+
+```text
+maxAbsPOxPost    ~= 0.70 m
+minAbsSinQkPost  ~= 0
+```
+
+Since `L1 + L2 = 0.70 m`, the actual leg is being pulled close to full
+horizontal extension relative to the hip. Since the two-link wheel-center
+Jacobian determinant is proportional to `sin(qk)`, the actual leg is also
+passing close to a singular configuration.
+
+Baseline `0 deg / 8 N` event order:
+
+```text
+t ~= 2.725 s: |pO_x| > 0.25 m
+t ~= 2.795 s: |theta| > 15 deg
+t ~= 2.820 s: qk branch/singularity guard trips
+```
+
+Decision:
+
+- Stop this line of soft parameter-only tests.
+- `QR`, `Fx/Fz` limit scaling, QP qdd soft-weight scaling, and small torque
+  scaling did not prevent branch loss.
+- Next useful change is explicit leg-configuration protection:
+
+```text
+qk lower/upper guard
+relative wheel-center x guard
+or physical Simscape joint limits/contact-safe stop
+```
+
+Important implementation note:
+
+- The current `ctrl.qpSolver = "equality"` path cannot enforce inequality
+  branch/joint guards. A formal QP guard requires `quadprog` or a new small QP
+  solver that handles inequalities.
+- A faster learning-model alternative is a pre-QP reference projection/command
+  governor or Simscape joint limits.
+
+## 2026-08-08 Pause Summary
+
+Stage summary:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\reports\2026_08_single_wheel_leg_stage_summary.md
+```
+
+Current engineering conclusion:
+
+- The plant and basic LQR + QP chain are usable for small disturbances.
+- The main failure is not simply "QP untuned" or "LQR wrong".
+- The missing piece is coordination between upper floating-base recovery and
+  lower leg workspace feasibility.
+- The upper LQR can command a pitch recovery that is reasonable for the
+  simplified base model but unsafe for the current leg configuration.
+- The lower fast equality-QP has no hard guard for `qk`, `pO_x`, or IK branch
+  safety, so it cannot guarantee avoidance of leg singularity/branch flip.
+
+Recommended when returning:
+
+```text
+1. reduce upper recovery aggressiveness near pitch zero crossing
+2. add explicit leg-configuration protection
+3. stop broad QR/limit/soft-weight scans until those guards exist
+```
+
+## 2026-08-08 Stage 2: First Vertical Tracking Case
+
+Decision:
+
+- Keep the current LQR/QP gains and the small-disturbance controller baseline.
+- Stop parameter scanning while the motion-control flow is being connected.
+- First test only a smooth floating-base `z` trajectory with zero external
+  disturbance. Horizontal and combined motion remain disabled.
+
+Implemented reference:
+
+```text
+0 to 1 s: hold the initial height
+1 to 4 s: minimum-jerk rise by 0.02 m
+4 to 6 s: hold the raised height
+6 to 9 s: minimum-jerk return to the initial height
+9 to 10 s: hold the initial height
+```
+
+Control changes:
+
+- `floating_base_reference.m` generates consistent `z_ref`, `dz_ref`, and
+  `ddz_ref` without changing the existing Simulink signal widths.
+- `floating_base_lqr_wrench.m` tracks the time-varying reference and adds
+  rigid-body acceleration feedforward.
+- The lower floating-base leg reference now receives the estimated hip
+  acceleration, so its `ddqd` remains consistent with a grounded wheel center
+  during vertical base motion.
+- `configure_base_tracking_case.m` prepares the existing model in memory, sets a
+  10 s stop time, and sets every Pulse Generator amplitude to zero. It does
+  not save or overwrite `source.slx`.
+
+Run entry point:
+
+```matlab
+startup
+configure_base_tracking_case
+sim("source", "StopTime", "10")
+```
+
+Status:
+
+```text
+Implementation and static inspection complete.
+Simulation intentionally left for manual observation.
+```
+
+### Aggressive z-step update
+
+Manual observation of the first smooth case:
+
+- The base broadly followed the commanded vertical motion.
+- The original 2 cm / 3 s minimum-jerk profile was too mild for the next
+  diagnostic.
+
+The next case keeps the same controller gains and changes only the reference:
+
+```text
+0 to 1 s: hold the initial height
+at 1 s:   step down by 0.06 m
+1 to 4 s: hold the lowered height
+at 4 s:   step back to the initial height
+4 to 10 s: observe recovery
+```
+
+This deliberately uses a position step. Reference velocity and acceleration
+remain zero away from the two discontinuities; the LQR feedback supplies the
+transient vertical wrench. All Pulse Generator disturbances remain disabled
+by `configure_base_tracking_case.m`.
+
+## 2026-08-08 Stage 3: Forward/Reverse Velocity Tracking
+
+The aggressive vertical step completed with good manual behavior. The next
+case keeps the base-height reference fixed and compares symmetric forward and
+reverse constant-speed motion:
+
+```text
+0 to 1.0 s: hold the initial position
+1.0 to 1.5 s: accelerate to +0.5 m/s
+1.5 to 3.0 s: move forward at +0.5 m/s
+3.0 to 3.5 s: decelerate to rest at x_ref = +1.0 m
+3.5 to 4.0 s: hold the forward position
+4.0 to 4.5 s: accelerate to -0.5 m/s
+4.5 to 6.0 s: return at -0.5 m/s
+6.0 to 6.5 s: decelerate to rest at the initial position
+6.5 to 10 s: observe recovery
+```
+
+The velocity ramps use the same minimum-jerk polynomial, integrated
+analytically so `x_ref`, `dx_ref`, and `ddx_ref` remain mutually consistent.
+The rigid-body feedforward supports `FHx = m*ddx_ref`, and the grounded-wheel
+reference uses the estimated hip horizontal acceleration for wheel-spin
+acceleration consistency. Vertical motion and all external pulse disturbances
+are disabled for this case.
+
+Data capture entry point:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_base_motion_tracking
+out = run_velocity_round_trip;
+```
+
+Each run writes a timestamped directory under:
+
+```text
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_base_motion_tracking
+```
+
+The result keeps both the complete `SimulationOutput/logsout` and a compact
+analysis-ready structure containing base state, joint state, LQR wrench,
+joint torque, the generated reference trajectory, and parameter metadata.

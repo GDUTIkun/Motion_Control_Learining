@@ -1,4 +1,4 @@
-function [qd, dqd, ddqd] = floating_base_leg_reference(t, baseState, traj, leg, base)
+function [qd, dqd, ddqd] = floating_base_leg_reference(t, baseState, traj, leg, base, aH)
 %FLOATING_BASE_LEG_REFERENCE Stage-1 leg reference tied to the floating base.
 %
 % The reference keeps the wheel center at the nominal horizontal offset from
@@ -16,6 +16,15 @@ if nargin < 4 || isempty(leg)
 end
 if nargin < 5 || isempty(base)
     base = evalin("base", "base");
+end
+if nargin < 6 || isempty(aH)
+    aH = zeros(2, 1);
+else
+    aH = double(aH(:));
+end
+if numel(aH) ~= 2
+    error("floating_base_leg_reference:InvalidHipAcceleration", ...
+        "aH must be a 2-element vector.");
 end
 
 baseState = double(baseState(:));
@@ -43,14 +52,14 @@ wheelCenterZ = groundTop + leg.r;
 pO = [xOHNom; wheelCenterZ - pH(2)];
 pO = projectToReachableAnnulus(pO, leg);
 vO = [0; -vH(2)];
-aO = zeros(2, 1);
+aO = [0; -aH(2)];
 
 [qJoint, dqJoint, ddqJoint] = wheel_leg_inverse_kinematics(pO, vO, aO, leg);
 
 wheelX = pH(1) + xOHNom;
 wheelDx = vH(1);
 [qw, dqw, ddqw] = wheelSpinReference(wheelX, wheelDx, qJoint, ...
-    dqJoint, ddqJoint, traj, leg, base);
+    dqJoint, ddqJoint, aH(1), traj, leg, base);
 
 qd = [qJoint; qw];
 dqd = [dqJoint; dqw];
@@ -58,7 +67,7 @@ ddqd = [ddqJoint; ddqw];
 end
 
 function [qw, dqw, ddqw] = wheelSpinReference(wheelX, wheelDx, qJoint, ...
-    dqJoint, ddqJoint, traj, leg, base)
+    dqJoint, ddqJoint, wheelDdx, traj, leg, base)
 qw0 = getFieldOrDefault(traj, "qw0", 0);
 thetaWheelBase0 = getFieldOrDefault(traj, "thetaWheelBase0", sum(qJoint));
 
@@ -70,7 +79,7 @@ wheelX0 = xEq(1) + rHEq(1) + getFieldOrDefault(traj, "xO0", 0);
 qw = qw0 - (wheelX - wheelX0) / leg.r ...
     - (sum(qJoint) - thetaWheelBase0);
 dqw = -wheelDx / leg.r - sum(dqJoint);
-ddqw = -sum(ddqJoint);
+ddqw = -wheelDdx / leg.r - sum(ddqJoint);
 end
 
 function hip = hipFromBase()
