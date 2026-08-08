@@ -41,10 +41,15 @@ traj.mode = "hip_ik";
 traj.freq = 0;
 traj.omega = 0;
 traj.phase = 0;
-% Initial stand pose. With equal link lengths, qh = -qk/2 places the wheel
-% contact point below the hip/base CoM in x, which is the natural balance
-% point for the single-wheel inverted-pendulum test.
-traj.offset = deg2rad([-19; 38]);
+% Lower the default equilibrium while keeping the wheel directly below the
+% hip. Recompute the positive-knee pose instead of adding a z transient.
+traj.nominalOffset = deg2rad([-19; 38]);
+traj.defaultHeightReduction = 0.08;
+nominalKin = wheel_leg_kinematics([traj.nominalOffset; 0], ...
+    zeros(3, 1), zeros(3, 1), leg);
+traj.offset = wheel_leg_inverse_kinematics( ...
+    nominalKin.pO + [0; traj.defaultHeightReduction], ...
+    zeros(2, 1), zeros(2, 1), leg);
 traj.amplitude = deg2rad([0; 0]);
 traj.qw0 = 0;
 
@@ -63,6 +68,16 @@ traj.xO0 = kin0.pO(1);
 traj.zO0 = kin0.pO(2);
 traj.zORef = traj.zO0;
 traj.thetaWheelBase0 = sum(q_joint0);
+% Scheme 1: use the final upper-layer body force to generate a bounded wheel
+% equilibrium, then approach it through a stateful second-order governor.
+traj.wheelPositionPlanning = true;
+traj.wheelPositionForceSource = "reference_acceleration";
+traj.wheelPositionForceScale = 0.20;
+traj.wheelPositionKneeMin = deg2rad(25);
+traj.wheelPositionFrequencyHz = 0.8;
+traj.wheelPositionDamping = 1.0;
+traj.wheelPositionVelocityMax = 0.4;
+traj.wheelPositionAccelerationMax = 2.0;
 
 ctrl = struct();
 ctrl.Ts = 0.005;
@@ -81,7 +96,11 @@ ctrl.qpWqdd = [1; 1; 1];
 ctrl.qpWtau = [1.0; 5.946535182e-06; 5.946535182e-06];
 ctrl.qpWFc = [0.0002433157215; 0.0002433157215];
 ctrl.qpWarmStart = true;
-ctrl.qpSolver = "equality";
+ctrl.qpSolver = "quadprog";
+ctrl.kneeGuardEnabled = true;
+ctrl.kneeGuardMin = deg2rad(10);
+ctrl.kneeGuardFrequencyHz = 3.0;
+ctrl.kneeGuardDamping = 1.0;
 % Match the Simscape Spatial Contact Force block conservatively
 % (static friction = 0.5, dynamic friction = 0.3 in source.slx).
 ctrl.mu = 0.45;
@@ -177,6 +196,10 @@ base.trajectory.accelDuration = 0.5;
 base.trajectory.cruiseDuration = 1.5;
 base.trajectory.decelDuration = 0.5;
 base.trajectory.turnHoldDuration = 0.5;
+base.trajectory.crouchDepth = 0;
+base.trajectory.crouchDownDuration = base.trajectory.settleTime;
+base.trajectory.crouchRecoverStart = 6.5;
+base.trajectory.crouchRecoverDuration = 1.0;
 
 baseLqr = floating_base_lqr_design(base);
 base.command = @(x) floating_base_lqr_command(x, baseLqr);

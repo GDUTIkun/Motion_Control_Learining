@@ -1,9 +1,9 @@
-function [qd, dqd, ddqd] = floating_base_leg_reference(t, baseState, traj, leg, base, aH)
-%FLOATING_BASE_LEG_REFERENCE Stage-1 leg reference tied to the floating base.
+function [qd, dqd, ddqd, debug] = floating_base_leg_reference(t, baseState, traj, leg, base, aH, FH_ext, updatePlanner)
+%FLOATING_BASE_LEG_REFERENCE Floating-base-consistent wheel-leg reference.
 %
-% The reference keeps the wheel center at the nominal horizontal offset from
-% the hip while the vertical wheel-center reference stays on the ground:
-%   pO_ref = [pH_x + xOH_nom; groundTop + r]
+% Scheme 1 converts the final upper-layer body force into a bounded wheel
+% equilibrium. A second-order governor supplies consistent position,
+% velocity, and acceleration references before IK.
 %
 % The two-link IK receives pO_ref - pH, so qh/qk stay geometrically
 % consistent with the current floating-base pose instead of fighting it.
@@ -26,6 +26,24 @@ if numel(aH) ~= 2
     error("floating_base_leg_reference:InvalidHipAcceleration", ...
         "aH must be a 2-element vector.");
 end
+if nargin < 7 || isempty(FH_ext)
+    FH_ext = zeros(2, 1);
+else
+    FH_ext = double(FH_ext(:));
+end
+if numel(FH_ext) ~= 2
+    error("floating_base_leg_reference:InvalidHipForce", ...
+        "FH_ext must be a 2-element vector.");
+end
+if nargin < 8 || isempty(updatePlanner)
+    updatePlanner = true;
+else
+    updatePlanner = logical(updatePlanner);
+end
+if ~isscalar(t) || ~isfinite(t)
+    error("floating_base_leg_reference:InvalidTime", ...
+        "t must be a finite scalar.");
+end
 
 baseState = double(baseState(:));
 if numel(baseState) ~= 6
@@ -42,28 +60,161 @@ drdtheta = [-rH(2); rH(1)];
 pH = baseState(1:2) + rH;
 vH = baseState(4:5) + dtheta * drdtheta;
 
-xOHNom = getFieldOrDefault(traj, "xO0", 0);
 groundTop = getFieldOrDefault(hipFromBase(), "groundTopY", ...
     getFieldOrDefault(base, "simscapeGroundTopY", 0));
 wheelCenterZ = groundTop + leg.r;
 
-% Stage 1: wheel x follows hip x with the nominal offset; wheel z is fixed
-% by the ground. Express that desired wheel-center motion relative to hip.
-pO = [xOHNom; wheelCenterZ - pH(2)];
+[rXDes, drXDes, ddrXDes, aB, plan] = plannedWheelOffset(t, baseState, ...
+    rH, wheelCenterZ, FH_ext, traj, leg, base, updatePlanner);
+pO = [rXDes - rH(1); wheelCenterZ - pH(2)];
 pO = projectToReachableAnnulus(pO, leg);
-vO = [0; -vH(2)];
-aO = [0; -aH(2)];
+vO = [baseState(4) + drXDes - vH(1); -vH(2)];
+aO = [aB(1) + ddrXDes - aH(1); -aH(2)];
 
 [qJoint, dqJoint, ddqJoint] = wheel_leg_inverse_kinematics(pO, vO, aO, leg);
 
-wheelX = pH(1) + xOHNom;
-wheelDx = vH(1);
+wheelX = baseState(1) + rXDes;
+wheelDx = baseState(4) + drXDes;
 [qw, dqw, ddqw] = wheelSpinReference(wheelX, wheelDx, qJoint, ...
-    dqJoint, ddqJoint, aH(1), traj, leg, base);
+    dqJoint, ddqJoint, aB(1) + ddrXDes, traj, leg, base);
 
 qd = [qJoint; qw];
 dqd = [dqJoint; dqw];
 ddqd = [ddqJoint; ddqw];
+debug = plan;
+debug.pO = pO;
+debug.qJoint = qJoint;
+end
+
+function [rXDes, drXDes, ddrXDes, aB, plan] = plannedWheelOffset(t, ...
+        baseState, rH, wheelCenterZ, FH_ext, traj, leg, base, updatePlanner)
+FBody = -FH_ext(:);
+aB = [FBody(1) / base.m; FBody(2) / base.m - base.g];
+
+thetaEq = getFieldOrDefault(base, "thetaEq", 0);
+rHEq = rotatePitch2D(base.rHBody(:), thetaEq);
+rXEq = rHEq(1) + getFieldOrDefault(traj, "xO0", 0);
+
+qkMin = getFieldOrDefault(traj, "wheelPositionKneeMin", 0);
+qkMin = min(max(qkMin, 0), pi);
+maxReach = sqrt(leg.L1^2 + leg.L2^2 + ...
+    2 * leg.L1 * leg.L2 * cos(qkMin));
+zOH = wheelCenterZ - (baseState(2) + rH(2));
+geometryFeasible = abs(zOH) <= maxReach;
+xOHMax = sqrt(max(0, maxReach^2 - zOH^2));
+rXLower = rH(1) - xOHMax;
+rXUpper = rH(1) + xOHMax;
+rXNeutral = clamp(rXEq, rXLower, rXUpper);
+deltaMax = min(rXNeutral - rXLower, rXUpper - rXNeutral);
+
+height = max(baseState(2) - wheelCenterZ, 1e-3);
+forceScale = getFieldOrDefault(traj, "wheelPositionForceScale", 1);
+forceSource = lower(string(getFieldOrDefault(traj, ...
+    "wheelPositionForceSource", "total_lqr_force")));
+switch forceSource
+    case "reference_acceleration"
+        [~, baseAccelerationReference] = floating_base_reference(t);
+        forcePlanningX = base.m * baseAccelerationReference(1);
+    case "total_lqr_force"
+        forcePlanningX = FBody(1);
+    otherwise
+        error("floating_base_leg_reference:InvalidForceSource", ...
+            "Unsupported wheelPositionForceSource: %s", forceSource);
+end
+if deltaMax > eps
+    force0 = base.m * base.g * deltaMax / height;
+    rXEquilibrium = rXNeutral - deltaMax * tanh( ...
+        forceScale * forcePlanningX / force0);
+else
+    force0 = 0;
+    rXEquilibrium = rXNeutral;
+end
+
+planningEnabled = getFieldOrDefault(traj, "wheelPositionPlanning", false);
+if planningEnabled
+    [rXDes, drXDes, ddrXDes] = wheelPositionGovernor(t, ...
+        rXEquilibrium, rXNeutral, rXLower, rXUpper, traj, base, ...
+        updatePlanner);
+else
+    rXDes = rXNeutral;
+    drXDes = 0;
+    ddrXDes = 0;
+end
+
+plan = struct("rXEquilibrium", rXEquilibrium, ...
+    "rXNeutral", rXNeutral, "rXDes", rXDes, ...
+    "drXDes", drXDes, "ddrXDes", ddrXDes, ...
+    "rXLower", rXLower, "rXUpper", rXUpper, ...
+    "force0", force0, "geometryFeasible", geometryFeasible, ...
+    "forceSource", forceSource, "forcePlanningX", forcePlanningX, ...
+    "zOH", zOH, "maxReach", maxReach, "FBody", FBody, "aB", aB);
+end
+
+function [rDes, vDes, aDes] = wheelPositionGovernor(t, rEq, rNeutral, ...
+        rLower, rUpper, traj, base, updateState)
+persistent state
+
+if ~updateState
+    if isempty(state) || t <= 0
+        rDes = rNeutral;
+        vDes = 0;
+        aDes = 0;
+    else
+        rDes = clamp(state.r, rLower, rUpper);
+        vDes = state.v;
+        aDes = state.a;
+    end
+    return;
+end
+
+if isempty(state) || t <= 0 || t < state.t
+    state = struct("t", t, "r", rNeutral, "v", 0, "a", 0);
+    rDes = state.r;
+    vDes = state.v;
+    aDes = state.a;
+    return;
+end
+
+dt = t - state.t;
+if dt <= max(1e-12, eps(max(1, abs(t))))
+    rDes = clamp(state.r, rLower, rUpper);
+    vDes = state.v;
+    aDes = state.a;
+    return;
+end
+
+frequencyHz = max(0, getFieldOrDefault(traj, ...
+    "wheelPositionFrequencyHz", 0.8));
+zeta = max(0, getFieldOrDefault(traj, "wheelPositionDamping", 1));
+vMax = max(0, getFieldOrDefault(traj, ...
+    "wheelPositionVelocityMax", inf));
+aMax = max(0, getFieldOrDefault(traj, ...
+    "wheelPositionAccelerationMax", inf));
+omega = 2 * pi * frequencyHz;
+nominalTs = max(1e-6, getFieldOrDefault(base, "Ts", dt));
+nSteps = max(1, ceil(dt / nominalTs - 1e-9));
+h = dt / nSteps;
+
+r = clamp(state.r, rLower, rUpper);
+v = clamp(state.v, -vMax, vMax);
+a = 0;
+for idx = 1:nSteps
+    vPrevious = v;
+    a = clamp(omega^2 * (rEq - r) - 2 * zeta * omega * v, ...
+        -aMax, aMax);
+    v = clamp(v + h * a, -vMax, vMax);
+    rCandidate = r + h * v;
+    r = clamp(rCandidate, rLower, rUpper);
+    if r ~= rCandidate
+        v = 0;
+    end
+    a = (v - vPrevious) / h;
+end
+
+state = struct("t", t, "r", r, "v", v, "a", a);
+rDes = r;
+vDes = v;
+aDes = a;
 end
 
 function [qw, dqw, ddqw] = wheelSpinReference(wheelX, wheelDx, qJoint, ...
@@ -119,4 +270,8 @@ if isfield(s, name)
 else
     value = defaultValue;
 end
+end
+
+function value = clamp(value, lower, upper)
+value = min(max(value, lower), upper);
 end

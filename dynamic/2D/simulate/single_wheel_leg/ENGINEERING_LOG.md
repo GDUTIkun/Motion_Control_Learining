@@ -1606,3 +1606,395 @@ D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_base_motion_track
 The result keeps both the complete `SimulationOutput/logsout` and a compact
 analysis-ready structure containing base state, joint state, LQR wrench,
 joint torque, the generated reference trajectory, and parameter metadata.
+
+## 2026-08-08 Stage 4: Force-Based Wheel-Position Planning (Scheme 1)
+
+Purpose:
+
+- Keep the existing floating-base LQR as the upper desired-wrench generator.
+- Use its final desired horizontal body force to determine the wheel-position
+  direction without introducing a second outer LQR.
+- Preserve the lower inverse-dynamics QP interface.
+
+Force convention:
+
+```text
+F_H_des = force applied by the leg to the body
+FH_ext  = -F_H_des = body-on-leg force passed to the lower QP
+FBody   = -FH_ext
+```
+
+The first implementation used the WIPM equilibrium relation:
+
+```text
+r_x_raw = r_x_eq - H/g * a_Bx_des
+a_Bx_des = FBody_x / m_B
+```
+
+where `r_x` is the wheel-center position relative to the floating-base CoM.
+The target was projected onto the positive-knee IK branch before conversion
+to `qd`, `dqd`, and `ddqd`.
+
+Implementation entry points:
+
+```text
+startup.m
+floating_base_leg_reference.m
+controller_qp_core.m
+wheel_leg_tracking_signal.m
+run_diagnostic_case.m
+test_force_based_wheel_position_reference.m
+```
+
+Static interface/sign check:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\dynamic\2D\simulate\single_wheel_leg
+test_force_based_wheel_position_reference
+```
+
+This check passed. It verifies the instantaneous sign relation, finite
+controller outputs, and the reference knee guard at the nominal base state.
+It does not verify temporal continuity or closed-loop feasibility.
+
+### Recorded zero-disturbance work condition
+
+The first closed-loop diagnostic reused the Stage 3 forward/reverse velocity
+tracking case:
+
+```text
+duration:              10 s
+controller sample:     0.005 s
+initial base state:    zeros(6,1)
+external pulse inputs: disabled
+0.0 to 1.0 s:          hold
+1.0 to 1.5 s:          accelerate to +0.5 m/s
+1.5 to 3.0 s:          forward cruise
+3.0 to 3.5 s:          decelerate to rest
+3.5 to 4.0 s:          hold
+4.0 to 4.5 s:          accelerate to -0.5 m/s
+4.5 to 6.0 s:          reverse cruise toward the initial position
+6.0 to 6.5 s:          decelerate to rest
+6.5 to 10.0 s:         recovery observation
+```
+
+Run setup:
+
+```matlab
+startup
+configure_base_tracking_case
+summary = run_diagnostic_case(zeros(6,1), 10, false);
+```
+
+One-off diagnostic timestamp:
+
+```text
+20260808_213358
+```
+
+Measured result:
+
+```text
+theta final                         0.012463 rad
+FHx body-force range               [-140, 140] N
+FHx RMS                             85.9203 N
+CoM-to-wheel height H              [0.7513, 0.8542] m
+unconstrained r_x_raw range         [-4.0608, 4.0560] m
+reference projection/clamp ratio   89.3 %
+FHx sign changes                    68
+r_x_ref max step per 5 ms           0.411922 m
+r_x_ref steps larger than 5 cm      197
+wheel q_ref max step per 5 ms       5.84495 rad
+finite-difference wheel q_ref rate  180.105 rad/s RMS
+commanded wheel dqd                 3.54559 rad/s RMS
+reference knee minimum              12.469 deg
+actual knee minimum                -63.0427 deg
+wheel-center relative error RMS     0.213619 m
+joint tracking RMS [hip knee wheel] [0.59062 0.67439 3.0386] rad
+QP exitflags                        [1]
+torque saturation ratio             [0 0.00065369 0.00065369]
+```
+
+Observed behavior:
+
+- The floating base remained stable despite large internal wheel/leg motion.
+- The wheel-position target repeatedly switched near the reachable-workspace
+  boundary.
+- The actual knee crossed the straight-leg singularity and entered the
+  opposite IK branch even though the reference remained mostly positive.
+
+Diagnosis:
+
+1. The WIPM relation produces an instantaneous equilibrium position, not an
+   executable position trajectory. The complete upper feedback force changes
+   too quickly to be used directly as a lower position reference.
+2. The current geometry maps the saturated `140 N` upper force to roughly
+   `4 m`, far outside the leg workspace, so the reference spends most of the
+   run on a geometric clamp.
+3. `qd` responds to the changing wheel target, while `dqd` and `ddqd` omit the
+   corresponding wheel-target velocity and acceleration. The lower PD/QP
+   therefore receives mutually inconsistent reference derivatives.
+4. A horizontal reference projection cannot guarantee the requested knee
+   margin when the vertical hip-to-wheel distance alone exceeds the safe
+   reach for that knee angle.
+5. `ctrl.qpSolver = "equality"` cannot enforce actual knee-angle or IK-branch
+   inequalities. A reference-only guard cannot prevent the real mechanism
+   from crossing the singularity.
+
+Why the body can remain stable:
+
+- Base stabilization, rolling/contact consistency, and wheel/leg posture are
+  different objectives.
+- The upper LQR continues to regulate the base while the soft lower reference
+  is sacrificed, producing stable external motion with poor internal motion.
+
+### Decision for the next implementation
+
+Keep Scheme 1 only as a force-conditioned equilibrium generator. Do not pass
+its instantaneous output directly to IK. Insert a stateful wheel-position
+command governor:
+
+```text
+FHx_des
+  -> bounded feasible wheel equilibrium r_x_eq
+  -> second-order command governor
+  -> consistent r_x_des, dr_x_des, ddr_x_des
+  -> IK
+  -> consistent qd, dqd, ddqd
+  -> constrained QP with actual knee/branch protection
+```
+
+Recommended initial governor limits:
+
+```text
+natural frequency:       0.8 Hz
+damping ratio:           1.0
+relative wheel speed:    0.4 m/s
+relative wheel accel:    2.0 m/s^2
+reference knee margin:   25 deg
+actual hard knee guard:  10 deg
+```
+
+The actual-state guard requires an inequality-capable QP path such as
+`quadprog`; changing only `wheelPositionForceScale` is a diagnostic, not the
+final correction.
+
+### Data-analysis boundary
+
+This one-off run was generated before the storage boundary was restated. From
+this stage onward:
+
+```text
+dynamic/2D/simulate/single_wheel_leg
+  = model, dynamics, controller implementation, engineering history
+
+calibration/studies/2026_08_force_based_wheel_position_planning
+  = work-condition definitions and analysis code
+
+calibration/results/studies/2026_08_force_based_wheel_position_planning
+  = raw runs, processed signals, metrics, and automatic plots
+
+calibration/figures/force_based_wheel_position_planning
+  = selected long-term figures
+
+calibration/reports
+  = stage conclusions intended for reuse or citation
+```
+
+Do not add new diagnostic datasets or batch-analysis outputs under the dynamic
+model directory.
+
+### Governed Scheme 1 implementation
+
+Implemented after the first closed-loop failure analysis:
+
+- The raw force inversion is replaced by a bounded `tanh` wheel equilibrium
+  that preserves the WIPM small-signal slope.
+- A stateful critically damped second-order governor produces consistent
+  relative wheel position, velocity, and acceleration commands.
+- Initial settings are `0.8 Hz`, damping `1.0`, `0.4 m/s`, and `2.0 m/s^2`.
+- The reference knee margin is raised to `25 deg`.
+- Wheel-world velocity and acceleration now include the governed relative
+  wheel derivatives before velocity/acceleration IK and rolling conversion.
+- The lower QP now uses `quadprog` and includes a `10 deg` knee acceleration
+  guard with a `3 Hz`, critically damped CBF-style inequality.
+- The Scope reference path reads the latest governor state without advancing
+  it. Only `controller_qp_core` updates the state at the `0.005 s` controller
+  sample time.
+
+Data-recording entry point:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_force_based_wheel_position_planning
+out = run_case(true);
+```
+
+Each run writes `raw_simulation.mat`, `tracking_data.mat`, and `summary.txt`
+under the matching timestamped `calibration/results/studies/...` directory.
+
+Static check:
+
+```matlab
+test_force_based_wheel_position_reference
+```
+
+Result:
+
+```text
+Force-based wheel-position governor check passed.
+```
+
+The static check covers governor bounds and derivative consistency, read-only
+Scope behavior, finite constrained-QP output, and the knee acceleration guard.
+Closed-loop Simulink execution remains pending manual observation and recorded
+data from `run_case`.
+
+### Next isolation after the first governed run
+
+The first governed full-motion run still showed an approximately `8.2 cm`
+peak-to-peak, `1 Hz` wheel motion during nominal standing. The complete upper
+LQR force had `5.09 N` RMS while the bounded map's characteristic force was
+only about `6.1 to 7.6 N`, so the force-to-wheel interface remained too
+sensitive near equilibrium.
+
+The default force interface scale is reduced from `1.0` to `0.03`. Before
+another motion test, run the isolated 5 s standing case:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_force_based_wheel_position_planning
+out = run_case(true, "standing");
+```
+
+This change only tests the standing wheel oscillation. No new physical knee
+limit is added in the same step, because the first full run also showed a
+separate QP-to-Simscape acceleration mismatch that must be isolated after the
+force-map sensitivity is verified.
+
+### Standing result and lower-controller isolation
+
+The recorded 5 s standing run `20260808_224537_126` passed the wheel-motion
+screen after setting `wheelPositionForceScale = 0.03`:
+
+```text
+steady actual wheel-position peak-to-peak:     4.70 mm
+steady reference peak-to-peak:                 2.21 mm
+maximum absolute base pitch:                 0.0335 rad
+actual knee range:                            36.9 to 40.5 deg
+geometry infeasibility / torque saturation:   none / none
+```
+
+The next run isolates the lower QP-to-plant path. It retains the original
+10 s velocity round trip, `quadprog`, and the knee guard, while disabling only
+the force-based wheel-position planner:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_force_based_wheel_position_planning
+out = run_case(true, "velocity_round_trip_no_planner");
+```
+
+If this case remains stable, the previous moving-case failure is specific to
+the added wheel-position task or its coupling with lower tracking. If it still
+fails, the lower QP/model mismatch must be corrected before reconnecting the
+planner.
+
+### Coupled-run feedback diagnosis and force-source separation
+
+The coupled run `20260808_230501_519` remained bounded but visibly amplified
+the recovery motion relative to `20260808_225504_029`, where the planner was
+disabled:
+
+```text
+recovery pitch RMS:             0.0353 -> 0.0559 rad  (+58.5 %)
+recovery pitch peak-to-peak:    0.1696 -> 0.2353 rad  (+38.7 %)
+recovery horizontal-force RMS:  8.27   -> 13.63 N     (+64.8 %)
+wheel-reference peak-to-peak:   0      -> 60.4 mm
+actual wheel peak-to-peak:      172.2  -> 249.0 mm    (+44.6 %)
+```
+
+The effect is not dominated by the direct pitch-to-horizontal-force LQR
+coefficient. At the maximum pitch, the total body force was `-57.30 N`; the
+position and velocity error terms contributed `-25.99 N` and `-29.84 N`,
+while the direct pitch term contributed only `-1.47 N`. Pitch, horizontal
+motion, and wheel motion are dynamically coupled, so the complete LQR force
+still carries the fast stabilization response.
+
+Using that complete force as a wheel-position target creates the additional
+delayed loop:
+
+```text
+base errors -> total LQR Fx -> wheel governor -> leg/contact motion
+            -> base errors
+```
+
+Decision: keep the complete LQR wrench in the fast lower-QP path, but replace
+the wheel-planning input with the task-level feedforward force:
+
+```text
+Fx_plan = m_B * ddx_ref
+```
+
+The implementation sets
+`traj.wheelPositionForceSource = "reference_acceleration"`. The old
+`"total_lqr_force"` source remains available only for reproducing the failed
+comparison. The existing `wheelPositionForceScale = 0.03` is intentionally
+unchanged so the first validation isolates force-source separation from
+amplitude retuning.
+
+### Acceleration knee margin and crouch isolation
+
+The feedforward-force run `20260808_231843_996` reduced the maximum pitch to
+`0.1102 rad` and the wheel-reference motion to `4.23 mm` peak-to-peak, but the
+actual knee still reached `12.58 deg` at `1.410 s`. This is almost identical
+to the planner-disabled baseline, so the remaining knee-margin loss is not
+caused primarily by wheel-reference feedback.
+
+At the critical sample, the hip-to-wheel displacement was approximately
+`[-195.8, -667.7] mm`. Its length was `695.8 mm`, close to the two-link
+maximum reach of `700 mm`. With wheel contact and base height constrained,
+horizontal motion therefore drives the knee toward the straight-leg branch.
+At the same horizontal displacement, the geometric height reductions needed
+for knee angles of `25 deg` and `30 deg` are approximately `12.9 mm` and
+`20.5 mm`, respectively.
+
+The next isolation adds a `25 mm` base crouch without changing controller or
+wheel-planner parameters:
+
+```text
+0.0 to 1.0 s:   quintic smooth descent to -25 mm
+1.0 to 6.5 s:   hold the lower base height
+6.5 to 7.5 s:   quintic smooth recovery to nominal height
+7.5 to 10.0 s:  nominal-height recovery observation
+```
+
+Run command:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_force_based_wheel_position_planning
+out = run_case(true, "velocity_round_trip_crouch");
+```
+
+### Low default pose and force-scale restoration
+
+The `25 mm` crouch run `20260808_233707_701` raised the actual minimum knee
+angle from `12.58 deg` to `28.87 deg` without increasing maximum pitch,
+vertical-force variation, or base-height tracking error. This confirms that
+lowering the equilibrium pose is an effective way to preserve the
+positive-knee workspace during acceleration.
+
+For the next run, the default equilibrium is lowered by `80 mm` relative to
+the original `[-19 deg, 38 deg]` stand pose. Startup recomputes the initial
+positive-knee joint angles through inverse kinematics and adjusts the
+Simscape world offset consistently; the LQR state still starts at its zero
+equilibrium, so no artificial z-reference transient is introduced.
+
+At the same time, `wheelPositionForceScale` is increased from `0.03` to
+`0.20`. The wheel planner continues to use only
+`Fx_plan = m_B * ddx_ref`; the complete LQR feedback force remains confined
+to the fast QP path.
+
+Run the ordinary motion case, without the additional crouch profile:
+
+```matlab
+cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_force_based_wheel_position_planning
+out = run_case(true, "velocity_round_trip");
+```

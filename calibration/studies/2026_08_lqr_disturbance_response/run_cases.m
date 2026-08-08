@@ -415,7 +415,8 @@ dtheta = signals.X(:, 6);
 
 for idx = 1:n
     [qdAbs, dqdAbs] = floating_base_leg_reference( ...
-        signals.time(idx), signals.X(idx, :).');
+        signals.time(idx), signals.X(idx, :).', [], [], [], [], ...
+        signals.qpInput.data(idx, 14:15).');
     qRef(idx, :) = [qdAbs(1) - theta(idx), qdAbs(2), qdAbs(3)];
     dqRef(idx, :) = [dqdAbs(1) - dtheta(idx), dqdAbs(2), dqdAbs(3)];
 end

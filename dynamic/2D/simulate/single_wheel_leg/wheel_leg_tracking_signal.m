@@ -25,7 +25,8 @@ t = x(1);
 thetaB = x(4);
 dthetaB = x(7);
 
-[qdAbs, dqdAbs, ~] = floating_base_leg_reference(t, x(2:7));
+[qdAbs, dqdAbs, ~] = floating_base_leg_reference(t, x(2:7), ...
+    [], [], [], [], x(14:15), false);
 
 qRelDes = [qdAbs(1) - thetaB; qdAbs(2); qdAbs(3)];
 dqRelDes = [dqdAbs(1) - dthetaB; dqdAbs(2); dqdAbs(3)];

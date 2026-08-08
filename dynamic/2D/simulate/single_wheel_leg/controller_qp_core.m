@@ -17,6 +17,10 @@ t = x(1);
 
 [qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg, aH);
 qddCmd = ddqd + ctrl.Kd * (dqd - dq) + ctrl.Kp * (qd - q);
+kneeQddMin = kneeAccelerationLowerBound(q, dq, ctrl);
+if isfinite(kneeQddMin)
+    qddCmd(2) = max(qddCmd(2), kneeQddMin);
+end
 
 [M, C, G] = wheel_leg_dynamics(q, dq, leg);
 kin = wheel_leg_kinematics(q, dq, [], leg);
@@ -54,6 +58,10 @@ Aineq = [
     zeros(1, 6),  0, -1
 ];
 bineq = zeros(3, 1);
+if isfinite(kneeQddMin)
+    Aineq = [Aineq; 0, -1, 0, zeros(1, 5)];
+    bineq = [bineq; -kneeQddMin];
+end
 
 tauMax = ctrl.tauMax(:);
 lb = [-inf(3, 1); -tauMax; -inf; 0];
@@ -112,13 +120,14 @@ debug.exitflag = exitflag;
 debug.FH_ext = FH_ext(:);
 debug.MBy_des = MBy_des;
 debug.tauRef = tauRef(:);
+debug.kneeQddMin = kneeQddMin;
 end
 
 function [qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg, aH)
 if numel(x) == 16
     base = evalin("base", "base");
     [qd, dqd, ddqd] = floating_base_leg_reference(t, x(2:7), ...
-        traj, leg, base, aH);
+        traj, leg, base, aH, x(14:15));
 else
     [qd, dqd, ddqd] = wheel_leg_reference(t, traj, leg);
 end
@@ -243,6 +252,19 @@ else
     value = defaultValue;
 end
 value = value(:);
+end
+
+function qddMin = kneeAccelerationLowerBound(q, dq, ctrl)
+if ~getCtrlField(ctrl, "kneeGuardEnabled", false)
+    qddMin = -inf;
+    return;
+end
+
+qMin = getCtrlField(ctrl, "kneeGuardMin", 0);
+frequencyHz = max(0, getCtrlField(ctrl, "kneeGuardFrequencyHz", 3));
+zeta = max(0, getCtrlField(ctrl, "kneeGuardDamping", 1));
+omega = 2 * pi * frequencyHz;
+qddMin = -2 * zeta * omega * dq(2) - omega^2 * (q(2) - qMin);
 end
 
 function [z, exitflag] = solveEqualityQp(H, f, Aeq, beq)

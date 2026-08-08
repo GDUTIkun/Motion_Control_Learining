@@ -135,7 +135,7 @@ dqdAbs = zeros(n, 3);
 ddqdAbs = zeros(n, 3);
 for k = 1:n
     [qd, dqd, ddqd] = floating_base_leg_reference(t(k), xin(k, 2:7).', ...
-        vars.traj, vars.leg, vars.base);
+        vars.traj, vars.leg, vars.base, [], xin(k, 14:15).');
     qdAbs(k, :) = qd.';
     dqdAbs(k, :) = dqd.';
     ddqdAbs(k, :) = ddqd.';
@@ -174,7 +174,8 @@ metrics.tauSat = tauSat;
     qAbs, dqAbs, qdAbs, dqdAbs, vars);
 metrics.contactVelocityActual = contactVelocityActual;
 metrics.contactVelocityRef = contactVelocityRef;
-[wheelCenterActual, wheelCenterRef] = wheelCenterPositions(xin, qAbs, vars);
+    [wheelCenterActual, wheelCenterRef] = wheelCenterPositions(xin, qAbs, ...
+        qdAbs, vars);
 metrics.wheelCenterActual = wheelCenterActual;
 metrics.wheelCenterRef = wheelCenterRef;
 metrics.wheelCenterError = wheelCenterActual - wheelCenterRef;
@@ -185,26 +186,18 @@ metrics.qpExitflag = qpExitflag;
 metrics.contactForce = contactForce;
 end
 
-function [actualPosition, refPosition] = wheelCenterPositions(xin, qAbs, vars)
+function [actualPosition, refPosition] = wheelCenterPositions(xin, qAbs, qdAbs, vars)
 n = size(xin, 1);
 actualPosition = zeros(n, 2);
 refPosition = zeros(n, 2);
-
-xOHNom = 0;
-if isfield(vars.traj, "xO0")
-    xOHNom = vars.traj.xO0;
-end
-groundTop = vars.base.simscapeGroundTopY;
-if evalin("base", "exist('hip', 'var')") && evalin("base", "isfield(hip, 'groundTopY')")
-    groundTop = evalin("base", "hip.groundTopY");
-end
 
 for k = 1:n
     baseState = xin(k, 2:7).';
     pH = floatingHipPosition(baseState, vars.base);
     kin = wheel_leg_kinematics(qAbs(k, :).', zeros(3, 1), [], vars.leg);
+    kinRef = wheel_leg_kinematics(qdAbs(k, :).', zeros(3, 1), [], vars.leg);
     actualPosition(k, :) = (pH + kin.pO).';
-    refPosition(k, :) = [pH(1) + xOHNom, groundTop + vars.leg.r];
+    refPosition(k, :) = (pH + kinRef.pO).';
 end
 end
 

@@ -18,9 +18,13 @@ end
 mode = lower(string(getFieldOrDefault(trajectory, "mode", "position")));
 if mode == "velocity_round_trip"
     [xOffset, dxRef, ddxRef] = velocityRoundTrip(t, trajectory);
+    [zOffset, dzRef, ddzRef] = crouchProfile(t, trajectory);
     xRef(1) = xRef(1) + xOffset;
+    xRef(2) = xRef(2) + zOffset;
     xRef(4) = xRef(4) + dxRef;
+    xRef(5) = xRef(5) + dzRef;
     aRef(1) = ddxRef;
+    aRef(2) = ddzRef;
     return;
 end
 
@@ -81,6 +85,43 @@ else
         tForward - segmentDuration - turnHoldDuration, -speed, ...
         accelDuration, cruiseDuration, decelDuration);
     x = forwardDistance + xBack;
+end
+end
+
+function [z, dz, ddz] = crouchProfile(t, trajectory)
+depth = max(0, getFieldOrDefault(trajectory, "crouchDepth", 0));
+if depth == 0
+    z = 0;
+    dz = 0;
+    ddz = 0;
+    return;
+end
+
+downDuration = getFieldOrDefault(trajectory, ...
+    "crouchDownDuration", getFieldOrDefault(trajectory, "settleTime", 1));
+recoverStart = getFieldOrDefault(trajectory, "crouchRecoverStart", inf);
+recoverDuration = getFieldOrDefault(trajectory, ...
+    "crouchRecoverDuration", downDuration);
+
+if t < downDuration
+    [alpha, dalpha, ddalpha] = smoothStep(t, downDuration);
+    z = -depth * alpha;
+    dz = -depth * dalpha;
+    ddz = -depth * ddalpha;
+elseif t < recoverStart
+    z = -depth;
+    dz = 0;
+    ddz = 0;
+elseif t < recoverStart + recoverDuration
+    [alpha, dalpha, ddalpha] = smoothStep( ...
+        t - recoverStart, recoverDuration);
+    z = -depth * (1 - alpha);
+    dz = depth * dalpha;
+    ddz = depth * ddalpha;
+else
+    z = 0;
+    dz = 0;
+    ddz = 0;
 end
 end
 
