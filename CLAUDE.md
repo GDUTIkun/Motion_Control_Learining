@@ -3,7 +3,7 @@
 项目级目录边界规则见 **AGENTS.md**（Claude Code 与 Codex 均会读取，必须遵守）：
 
 ```text
-dynamic     = 仿真/模型/控制器本体
+model       = 仿真/模型/控制器本体
 calibration = 实验/分析/标定平台
 ```
 

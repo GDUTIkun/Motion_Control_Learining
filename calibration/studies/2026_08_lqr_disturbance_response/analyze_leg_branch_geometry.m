@@ -27,7 +27,7 @@ end
 studyDir = fileparts(mfilename("fullpath"));
 calibrationDir = char(java.io.File(fullfile(studyDir, "..", "..")).getCanonicalPath());
 repoRoot = char(java.io.File(fullfile(calibrationDir, "..")).getCanonicalPath());
-simDir = fullfile(repoRoot, "dynamic", "2D", "simulate", "single_wheel_leg");
+simDir = fullfile(repoRoot, "model", "simulate", "base_with_wheel_leg");
 addpath(simDir);
 
 processedDir = fullfile(calibrationDir, "data", "processed");

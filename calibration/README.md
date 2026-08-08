@@ -2,7 +2,7 @@
 
 这个目录用于长期存放仿真评估、数据提取、指标计算、画图、参数扫描和贝叶斯优化相关内容。
 
-模型本体、动力学、控制器代码仍然放在对应的 `dynamic/...` 目录中。`calibration` 只负责“怎么运行、怎么记录、怎么评价、怎么调参”。
+模型本体、动力学、控制器代码仍然放在对应的 `model/...` 目录中。`calibration` 只负责”怎么运行、怎么记录、怎么评价、怎么调参”。
 
 ## 目录结构
 
@@ -25,14 +25,14 @@ calibration/
 推荐一直保持这个边界：
 
 ```text
-dynamic     = 被测系统本体
+model       = 被测系统本体
 calibration = 实验、分析、标定平台
 ```
 
 例如当前 2D 单轮腿倒立摆模型在：
 
 ```text
-D:\Workspace\CodeWorkspace\dynamic\2D\simulate\single_wheel_leg
+D:\Workspace\CodeWorkspace\model\simulate\base_with_wheel_leg
 ```
 
 它的批量扰动测试、指标统计、画图和后续优化应该放在：

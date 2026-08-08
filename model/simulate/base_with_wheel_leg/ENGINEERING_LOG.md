@@ -1998,3 +1998,114 @@ Run the ordinary motion case, without the additional crouch profile:
 cd D:\Workspace\CodeWorkspace\calibration\studies\2026_08_force_based_wheel_position_planning
 out = run_case(true, "velocity_round_trip");
 ```
+
+### Final A/B result and wheel-position debugging closure
+
+Wheel-position debugging was closed on 2026-08-09 using a same-pose,
+same-motion A/B comparison. Both cases used the default equilibrium lowered by
+`80 mm`, `quadprog`, the knee guard, and no external pulse disturbances. The
+only difference was whether the force-based wheel-position planner was
+enabled.
+
+Recorded runs:
+
+```text
+planner enabled:
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_force_based_wheel_position_planning\20260808_235228_203
+
+planner disabled:
+D:\Workspace\CodeWorkspace\calibration\results\studies\2026_08_force_based_wheel_position_planning\20260808_235904_178
+```
+
+| Metric | Planner enabled | Planner disabled |
+|---|---:|---:|
+| Maximum absolute pitch | `0.0955 rad` | `0.1042 rad` |
+| Minimum actual knee angle | `51.54 deg` | `51.92 deg` |
+| Wheel-reference peak-to-peak | `25.57 mm` | `0 mm` |
+| Wheel-position error RMS | `65.81 mm` | `67.31 mm` |
+| Geometry infeasibility | none | none |
+| Torque saturation | none | none |
+| QP exitflag | all `1` | all `1` |
+
+Subtracting the planner-disabled trajectory from the planner-enabled
+trajectory isolates the planner's incremental effect from the wheel motion
+that is already required by floating-base balance and rolling contact:
+
+```text
+actual wheel-position A/B difference RMS:        3.09 mm
+actual wheel-position A/B difference maximum:    7.91 mm
+actual wheel-position A/B difference p-p:        15.67 mm
+wheel-reference A/B difference RMS:               5.07 mm
+wheel-reference A/B difference maximum:          12.90 mm
+wheel-reference A/B difference p-p:              25.57 mm
+least-squares incremental gain over the run:       0.135
+incremental command/response correlation:          0.235
+```
+
+The response had the intended sign at the four acceleration-transition
+endpoints, but only a fraction of the commanded magnitude appeared in the A/B
+difference:
+
+| Time | Wheel command | Actual A/B increment |
+|---:|---:|---:|
+| `1.50 s` | `-12.64 mm` | `-4.01 mm` |
+| `3.50 s` | `+12.35 mm` | `+3.55 mm` |
+| `4.50 s` | `+12.83 mm` | `+5.69 mm` |
+| `6.50 s` | `-12.59 mm` | `-3.75 mm` |
+
+This explains why the commanded wheel-position change during each
+acceleration segment was only about `9--13 mm`, while the measured wheel
+position moved about `125--150 mm`: most of the measured motion also exists
+with the planner disabled. It is the wheel motion needed by base translation,
+pitch stabilization, and rolling contact, not the tracking response to the
+added reference alone.
+
+The current lower QP treats inverse-kinematic joint acceleration as a soft
+objective. Dynamics, contact, torque, and knee inequalities take precedence.
+The contact Jacobian has rank `2` for three joint accelerations, leaving one
+instantaneous contact-compatible degree of freedom, and the recorded
+QP-to-Simscape acceleration mismatch is still material. Therefore this
+implementation cannot make relative wheel position a hard trajectory merely
+by increasing the joint PD gains or `wheelPositionForceScale`.
+
+Final classification:
+
+```text
+PASS:     bounded, correctly directed, low-bandwidth wheel-position bias;
+          no geometry, knee-margin, torque, or nominal-stability regression;
+          small improvement in maximum pitch.
+
+NOT PASS: hard wheel-position constraint or accurate wheel-trajectory
+          tracking. That capability was not implemented or demonstrated.
+```
+
+The accepted configuration is frozen as:
+
+```text
+defaultHeightReduction          = 0.08 m
+initial positive-knee pose       = [-33.774408, 67.548817] deg
+wheelPositionForceSource         = "reference_acceleration"
+Fx_plan                          = m_B * ddx_ref
+wheelPositionForceScale          = 0.20
+planner natural frequency        = 0.8 Hz
+planner damping ratio            = 1.0
+relative-position speed limit    = 0.4 m/s
+relative-position accel limit    = 2.0 m/s^2
+reference knee margin            = 25 deg
+actual-knee guard                = 10 deg
+QP solver                        = quadprog
+```
+
+The complete LQR feedback wrench remains in the fast force/QP path. The old
+`total_lqr_force` planner source is retained only to reproduce the rejected
+feedback-coupled experiment. Do not increase `wheelPositionForceScale` to
+force apparent trajectory tracking; that reconnects the pitch/translation
+feedback loop that caused the earlier oscillation.
+
+If accurate relative wheel-position tracking becomes a future requirement,
+reopen it as a different controller-design task: add an explicit wheel task
+to a floating-base whole-body QP/MPC, include full floating-base dynamics and
+rolling-contact constraints, and optimize or relax interaction force and
+wheel task priorities together. The present force-based wheel-position
+debugging task is complete; no further controller changes belong to this
+work item.

@@ -4,7 +4,7 @@ function cfg = experiment_config()
 experimentDir = fileparts(mfilename("fullpath"));
 calibrationDir = fullfile(experimentDir, "..", "..");
 repoRoot = fullfile(calibrationDir, "..");
-simDir = fullfile(repoRoot, "dynamic", "3D", "simulate", "single_leg");
+simDir = fullfile(repoRoot, "model", "simulate", "single_leg");
 
 cfg = struct();
 cfg.name = "example_pd_single_leg";

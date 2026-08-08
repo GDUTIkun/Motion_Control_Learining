@@ -16,6 +16,7 @@ hs_err_pid*
 # MATLAB/Simulink 缓存和自动生成目录
 *.slxc
 slprj/
+.tmp_*/
 codegen/
 *_ert_rtw/
 *_grt_rtw/

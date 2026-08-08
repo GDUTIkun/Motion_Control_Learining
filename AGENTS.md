@@ -3,15 +3,16 @@
 这是一个控制/仿真仓库。写**任何新文件**之前，先判定它属于哪一类，放到正确的边界内。核心划分：
 
 ```text
-dynamic     = 被测系统本体（模型、动力学、控制器代码、Simulink .slx）
+model       = 被测系统本体（模型、动力学、控制器代码、Simulink .slx）
 calibration = 实验、分析、标定平台（怎么跑、怎么记、怎么评价、怎么调参）
 tools       = 第三方库（acados/casadi），禁止放项目代码
+figures     = 顶层图床（模型示意图/原理图等归档图）
 ```
 
 ## 第一判定：仿真 vs 分析
 
 - **仿真类**（动力学/运动学/IK/状态方程、LQR/QP 控制器、Simulink 模型、模型侧 configure/startup 脚本）
-  → `dynamic/` 下。模型放 `dynamic/2D/simulate/<model>/`（或 `dynamic/3D/`）。
+  → `model/` 下。模型代码放 `model/code/`，Simulink 模型放 `model/simulate/<model>/`。
 - **分析类**（批量工况运行、信号提取、指标计算、画图、参数扫描、贝叶斯优化、结果汇总、报告）
   → `calibration/` 下。
 
@@ -34,8 +35,8 @@ tools       = 第三方库（acados/casadi），禁止放项目代码
 
 ## 反面清单（常见放错）
 
-- 把分析脚本/数据表/结果图放进 `dynamic/` → 应移入 `calibration/`
-- 把动力学/控制器源码放进 `calibration/`（`experiments/` 里的运行包装除外）→ 应移入 `dynamic/`
+- 把分析脚本/数据表/结果图放进 `model/` → 应移入 `calibration/`
+- 把动力学/控制器源码放进 `calibration/`（`experiments/` 里的运行包装除外）→ 应移入 `model/`
 - 在 `tools/` 放项目代码 → 禁止，`tools/` 只放第三方库
 - 根目录散落源码（`source.slx`/`source.slxc` 除外）→ 应移入对应子目录
 
