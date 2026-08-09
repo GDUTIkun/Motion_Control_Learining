@@ -15,6 +15,7 @@ wasDirty = get_param(model, "Dirty");
 cleanup = onCleanup(@() restoreModel(model, initFcn, wasDirty));
 set_param(model, "InitFcn", "");
 evalin("base", "startup");
+configure_base_tracking_case("velocity", "lqr");
 baseNmpc = evalin("base", "baseNmpc");
 baseLqr = evalin("base", "baseLqr");
 ctrl = evalin("base", "ctrl");
@@ -25,6 +26,10 @@ assert(all(isfinite(nominal.bodyWrench), "all"));
 assert(all(isfinite(nominal.cpuTime)));
 assert(all(nominal.cpuTime <= baseNmpc.maxSolveTime));
 assert(all(nominal.fallback == 0), "Nominal NMPC unexpectedly fell back.");
+assert(all(isfinite(nominal.wheelState), "all") ...
+    && all(isfinite(nominal.wheelReference), "all"));
+assert(all(nominal.wheelState(:, 7) >= baseNmpc.xiMin - 1e-9) ...
+    && all(nominal.wheelState(:, 7) <= baseNmpc.xiMax + 1e-9));
 assertTorqueBounds(nominal.torque, ctrl.tauMax);
 nominalRms = trackingRms(nominal, baseLqr);
 
@@ -48,6 +53,13 @@ roundTripEnd = trajectory.settleTime + 2*(trajectory.accelDuration ...
     + trajectory.cruiseDuration + trajectory.decelDuration) ...
     + trajectory.turnHoldDuration;
 if stopTime >= roundTripEnd
+    assert(max(abs(nominal.wheelState(:, 2))) < 0.15, ...
+        "NMPC base height diverged during the full trajectory.");
+    assert(max(abs(nominal.wheelState(:, 3))) < deg2rad(30), ...
+        "NMPC base pitch diverged during the full trajectory.");
+    assert(abs(nominal.wheelState(end, 3)) < 0.05 ...
+        && max(abs(nominal.wheelState(end, 4:6))) < 0.05, ...
+        "NMPC did not settle after the full trajectory.");
     fprintf("Full trajectory RMS [x theta]: NMPC %s, LQR %s.\n", ...
         mat2str(nominalRms, 6), mat2str(baselineRms, 6));
     assert(all(nominalRms <= 1.05*baselineRms + 1e-9), ...
@@ -93,6 +105,8 @@ data.status = namedData(logs, "nmpcStatus");
 data.cpuTime = namedData(logs, "nmpcCpuTime");
 data.fallback = namedData(logs, "nmpcFallback");
 data.bodyWrench = namedData(logs, "nmpcBodyWrench");
+data.wheelState = namedData(logs, "baseWheelState");
+data.wheelReference = namedData(logs, "wheelPositionLqrReference");
 [qpSignal, ~] = pathData(logs, 10, "source/Interpreted MATLAB Function");
 data.torque = qpSignal(:, 1:3);
 data.qpWrenchSlack = qpSignal(:, 4:6);
@@ -100,7 +114,7 @@ data.qpWrenchFeasible = qpSignal(:, 7:9);
 data.qpWrenchSlackNorm = qpSignal(:, 10);
 [data.lqrCommand, data.lqrTime] = pathData(logs, 3, ...
     "source/PD_only/Interpreted MATLAB Function");
-[data.controllerInput, data.controllerTime] = pathData(logs, 16, ...
+[data.controllerInput, data.controllerTime] = pathData(logs, 20, ...
     "source/PD_only/Mux1");
 [data.baseState, data.baseTime] = pathData(logs, 7, "source/PD_only/Mux");
 end

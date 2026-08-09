@@ -64,13 +64,16 @@ traj.thetaWheelBase0 = sum(q_joint0);
 % Scheme 1: use the final upper-layer body force to generate a bounded wheel
 % equilibrium, then approach it through a stateful second-order governor.
 traj.wheelPositionPlanning = true;
+traj.wheelPositionPlanner = "lqr";
 traj.wheelPositionForceSource = "reference_acceleration";
 traj.wheelPositionForceScale = 0.20;
 traj.wheelPositionKneeMin = deg2rad(25);
-traj.wheelPositionFrequencyHz = 0.8;
+traj.wheelPositionFrequencyHz = 0.4;
 traj.wheelPositionDamping = 1.0;
-traj.wheelPositionVelocityMax = 0.4;
-traj.wheelPositionAccelerationMax = 2.0;
+traj.wheelPositionVelocityMax = 0.15;
+traj.wheelPositionAccelerationMax = 0.5;
+traj.wheelLqrQ = [4; 1];
+traj.wheelLqrR = 200;
 
 ctrl = struct();
 ctrl.Ts = 0.005;
@@ -149,7 +152,7 @@ base.thetaIntegralLimit = 0.5;
 % Horizontal constant-speed comparison: forward, stop, then reverse home.
 base.trajectory = struct();
 base.trajectory.enabled = true;
-base.trajectory.mode = "stand";
+base.trajectory.mode = "velocity";
 base.trajectory.settleTime = 1.0;
 base.trajectory.cruiseVelocity = 0.5;
 base.trajectory.accelDuration = 0.5;
@@ -163,30 +166,41 @@ base.trajectory.crouchRecoverDuration = 1.0;
 
 baseLqr = floating_base_lqr_design(base);
 base.command = @(x) floating_base_lqr_command(x, baseLqr);
+wheelLqr = wheel_position_lqr_design(base, leg, traj);
 
-% Upper-layer NMPC configuration. Solver generation is deliberately kept out
+% Planar base-plus-wheel-position NMPC configuration. Solver generation is
+% deliberately kept out
 % of startup; use build_base_nmpc_solver when the generated S-Function is absent.
 baseNmpc = struct();
-baseNmpc.enabled = false;
+baseNmpc.enabled = true;
 baseNmpc.Ts = 0.005;
 baseNmpc.N = 50;
-baseNmpc.Q = base.Q;
-baseNmpc.R = base.R;
-terminalBase = base;
-terminalBase.Ts = baseNmpc.Ts;
-terminalDesign = floating_base_lqr_design(terminalBase, baseNmpc.Q, baseNmpc.R);
-baseNmpc.W_e = terminalDesign.S;
-baseNmpc.uMin = [-base.forceMax(1); -base.forceMax(2); -base.momentMax];
-baseNmpc.uMax = [ base.forceMax(1);  base.forceMax(2);  base.momentMax];
+baseNmpc.Q = blkdiag(base.Q, 50, 5);
+baseNmpc.R = diag([0.02, 0.01, 0.02]);
+baseNmpc.model = base_wheel_state_space(base, leg, traj);
+terminalSystem = c2d(ss(baseNmpc.model.A, baseNmpc.model.B, ...
+    baseNmpc.model.C, baseNmpc.model.D), baseNmpc.Ts, "zoh");
+[~, baseNmpc.W_e] = dlqr(terminalSystem.A, terminalSystem.B, ...
+    baseNmpc.Q, baseNmpc.R);
+baseNmpc.uMin = [-80; 0; -40];
+baseNmpc.uMax = [ 80; 100; 40];
+baseNmpc.xiMin = wheelLqr.positionMin;
+baseNmpc.xiMax = wheelLqr.positionMax;
+% The measured relative speed contains a short contact-settling transient;
+% keep the planner reference conservative without making the OCP infeasible.
+baseNmpc.dxiMax = 2.0;
 baseNmpc.maxSolveTime = baseNmpc.Ts;
-baseNmpc.solverName = "base_wheel_leg_nmpc";
+% The reduced upper model does not include contact/leg transients. Blend its
+% correction with the proven base LQR command before driving the lower QP.
+baseNmpc.commandBlend = 0.2;
+baseNmpc.solverName = "base_wheel_8state_nmpc";
 baseNmpc.sfunName = "acados_solver_sfunction_" + baseNmpc.solverName;
 tsTag = replace(string(sprintf("%.9g", baseNmpc.Ts)), ...
     [".", "-", "+"], ["p", "m", ""]);
-baseNmpc.buildTag = "Ts_" + tsTag + "_N_" + string(baseNmpc.N);
+baseNmpc.buildTag = "Ts_" + tsTag + "_N_" + string(baseNmpc.N) + "_v2";
 baseNmpc.generatedDir = fullfile(simulateDir, "generated", ...
     baseNmpc.solverName, baseNmpc.buildTag);
-baseNmpc.referenceSize = 9 + 9*(baseNmpc.N - 1) + 6;
+baseNmpc.referenceSize = 11 + 11*(baseNmpc.N - 1) + 8;
 baseNmpc.available = isfile(fullfile(baseNmpc.generatedDir, ...
     baseNmpc.sfunName + "." + mexext));
 if baseNmpc.available
@@ -198,6 +212,7 @@ assignin("base", "ctrl", ctrl);
 assignin("base", "traj", traj);
 assignin("base", "base", base);
 assignin("base", "baseLqr", baseLqr);
+assignin("base", "wheelLqr", wheelLqr);
 assignin("base", "baseNmpc", baseNmpc);
 
 [base, leg, baseLqr] = set_initial_base_state(base.x0);
@@ -220,8 +235,10 @@ fprintf("Floating-base LQR K loaded. Equilibrium [FHx; FHz; MBy] = [%.4f; %.4f; 
     baseLqr.model.uEq(1), baseLqr.model.uEq(2), baseLqr.model.uEq(3));
 fprintf("Floating-base controller: %s LQR, Ts = %.4f s.\n", ...
     baseLqr.controllerType, baseLqr.Ts);
+fprintf("Wheel-position planner: %s, scheduled height %.3f to %.3f m.\n", ...
+    traj.wheelPositionPlanner, wheelLqr.heightGrid(1), wheelLqr.heightGrid(end));
 if baseNmpc.available
-    fprintf("Upper-layer NMPC S-Function ready, Ts = %.4f s, N = %d.\n", ...
+    fprintf("Upper-layer 8-state NMPC S-Function ready, Ts = %.4f s, N = %d.\n", ...
         baseNmpc.Ts, baseNmpc.N);
 else
     fprintf("Upper-layer NMPC S-Function is not built. Run " + ...

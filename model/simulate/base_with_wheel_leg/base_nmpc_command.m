@@ -22,7 +22,12 @@ valid = baseNmpc.enabled && status == 0 ...
     && cpuTime <= baseNmpc.maxSolveTime;
 
 if valid
-    command = [-uBody(1:2); uBody(3)];
+    nmpcCommand = [-uBody(1:2); uBody(3)];
+    blend = 1;
+    if isfield(baseNmpc, "commandBlend")
+        blend = min(max(double(baseNmpc.commandBlend), 0), 1);
+    end
+    command = lqrCommand + blend * (nmpcCommand - lqrCommand);
     fallback = 0;
 else
     command = lqrCommand;

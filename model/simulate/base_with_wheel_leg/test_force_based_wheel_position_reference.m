@@ -9,6 +9,8 @@ assignin("base", "baseLqr", baseLqr);
 ctrl = evalin("base", "ctrl");
 leg = evalin("base", "leg");
 traj = evalin("base", "traj");
+traj.wheelPositionPlanner = "qp_force";
+assignin("base", "traj", traj);
 baseState = zeros(6, 1);
 FHSupport = base.m * base.g;
 Ts = base.Ts;

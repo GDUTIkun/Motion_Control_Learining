@@ -15,7 +15,8 @@ function tau = controller_qp(x)
 %
 % Input for the maintained floating-base plant:
 %   x = [t; xB; zB; thetaB; dxB; dzB; dthetaB;
-%        qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des]
+%        qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des;
+%        optional xiRef; dxiRef; ddxiRef; xiRaw]
 %
 % FH_ext is the body-on-leg reaction force. If the upper LQR returns the
 % force applied by the leg to the body, pass its negative here. MBy_des is

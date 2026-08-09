@@ -2,9 +2,9 @@ function [tau, debug] = controller_qp_core(x)
 %CONTROLLER_QP_CORE Shared implementation for QP inverse dynamics.
 persistent qpOptions zWarm
 
-if numel(x) ~= 16
+if ~ismember(numel(x), [16, 20])
     error("controller_qp:InvalidInput", ...
-        "Expected the 16D floating-base controller input.");
+        "Expected the 16D legacy or 20D planned-wheel controller input.");
 end
 
 leg = evalin("base", "leg");
@@ -132,8 +132,12 @@ end
 
 function [qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg, aH)
 base = evalin("base", "base");
+wheelReference = [];
+if numel(x) >= 20
+    wheelReference = x(17:19);
+end
 [qd, dqd, ddqd] = floating_base_leg_reference(t, x(2:7), ...
-    traj, leg, base, aH, x(14:15));
+    traj, leg, base, aH, x(14:15), true, wheelReference);
 end
 
 function [q, dq, FH_ext, MBy_des, vH, aH] = parseControllerInput(x)

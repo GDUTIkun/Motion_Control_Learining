@@ -2,6 +2,8 @@ function test_qp_wrench_slack()
 %TEST_QP_WRENCH_SLACK Verify feasible wrench projection and hard torque bounds.
 
 run(fullfile(fileparts(mfilename("fullpath")), "startup.m"));
+traj.wheelPositionPlanner = "qp_force";
+assignin("base", "traj", traj);
 base = evalin("base", "base");
 leg = evalin("base", "leg");
 ctrl = evalin("base", "ctrl");

@@ -1,4 +1,4 @@
-function [qd, dqd, ddqd, debug] = floating_base_leg_reference(t, baseState, traj, leg, base, aH, FH_ext, updatePlanner)
+function [qd, dqd, ddqd, debug] = floating_base_leg_reference(t, baseState, traj, leg, base, aH, FH_ext, updatePlanner, wheelReference)
 %FLOATING_BASE_LEG_REFERENCE Floating-base-consistent wheel-leg reference.
 %
 % Scheme 1 converts the final upper-layer body force into a bounded wheel
@@ -40,6 +40,9 @@ if nargin < 8 || isempty(updatePlanner)
 else
     updatePlanner = logical(updatePlanner);
 end
+if nargin < 9
+    wheelReference = [];
+end
 if ~isscalar(t) || ~isfinite(t)
     error("floating_base_leg_reference:InvalidTime", ...
         "t must be a finite scalar.");
@@ -63,8 +66,30 @@ vH = baseState(4:5) + dtheta * drdtheta;
 groundTop = getFieldOrDefault(base, "simscapeGroundTopY", 0);
 wheelCenterZ = groundTop + leg.r;
 
-[rXDes, drXDes, ddrXDes, aB, plan] = plannedWheelOffset(t, baseState, ...
-    rH, wheelCenterZ, FH_ext, traj, leg, base, updatePlanner);
+plannerMode = lower(string(getFieldOrDefault(traj, ...
+    "wheelPositionPlanner", "qp_force")));
+if plannerMode == "lqr"
+    wheelReference = double(wheelReference(:));
+    if numel(wheelReference) < 3 || any(~isfinite(wheelReference(1:3)))
+        error("floating_base_leg_reference:MissingLqrReference", ...
+            "The LQR planner requires [xiRef; dxiRef; ddxiRef].");
+    end
+    rXDes = wheelReference(1);
+    drXDes = wheelReference(2);
+    ddrXDes = wheelReference(3);
+    FBody = -FH_ext(:);
+    aB = [FBody(1) / base.m; FBody(2) / base.m - base.g];
+    plan = struct("plannerMode", plannerMode, "rXDes", rXDes, ...
+        "drXDes", drXDes, "ddrXDes", ddrXDes, ...
+        "FBody", FBody, "aB", aB);
+elseif plannerMode == "qp_force"
+    [rXDes, drXDes, ddrXDes, aB, plan] = plannedWheelOffset(t, ...
+        baseState, rH, wheelCenterZ, FH_ext, traj, leg, base, updatePlanner);
+    plan.plannerMode = plannerMode;
+else
+    error("floating_base_leg_reference:InvalidPlanner", ...
+        "wheelPositionPlanner must be 'lqr' or 'qp_force'.");
+end
 pO = [rXDes - rH(1); wheelCenterZ - pH(2)];
 pO = projectToReachableAnnulus(pO, leg);
 vO = [baseState(4) + drXDes - vH(1); -vH(2)];

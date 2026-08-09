@@ -1,22 +1,30 @@
-function configure_base_tracking_case(caseMode)
+function configure_base_tracking_case(caseMode, plannerMode)
 %CONFIGURE_BASE_TRACKING_CASE Configure stand, z, or velocity tracking.
 
 if nargin < 1 || isempty(caseMode)
     caseMode = "velocity";
 end
+if nargin < 2 || isempty(plannerMode)
+    plannerMode = "lqr";
+end
 caseMode = lower(string(caseMode));
+plannerMode = lower(string(plannerMode));
 if ~ismember(caseMode, ["stand", "z", "velocity"])
     error("configure_base_tracking_case:InvalidMode", ...
         "caseMode must be 'stand', 'z', or 'velocity'.");
 end
+if ~ismember(plannerMode, ["lqr", "qp_force"])
+    error("configure_base_tracking_case:InvalidPlanner", ...
+        "plannerMode must be 'lqr' or 'qp_force'.");
+end
 
 model = "source";
 load_system(model);
-configure_discrete_controller_timing(false);
 
 base = evalin("base", "base");
 baseLqr = evalin("base", "baseLqr");
 baseNmpc = evalin("base", "baseNmpc");
+traj = evalin("base", "traj");
 trajectory = base.trajectory;
 trajectory.enabled = true;
 trajectory.mode = caseMode;
@@ -24,17 +32,17 @@ trajectory.crouchDepth = 0;
 stopTime = 10;
 if caseMode == "stand"
     stopTime = 5;
-    % The generated NMPC command does not meet the stand pitch acceptance;
-    % use the existing LQR fallback for this stability baseline.
-    baseNmpc.enabled = false;
 elseif caseMode == "z"
     trajectory.crouchDepth = 0.025;
 end
+traj.wheelPositionPlanner = plannerMode;
+baseNmpc.enabled = caseMode == "velocity" && plannerMode == "lqr";
 base.trajectory = trajectory;
 baseLqr.trajectory = trajectory;
 assignin("base", "base", base);
 assignin("base", "baseLqr", baseLqr);
 assignin("base", "baseNmpc", baseNmpc);
+assignin("base", "traj", traj);
 
 pulseBlocks = find_system(model, "LookUnderMasks", "all", ...
     "FollowLinks", "on", "BlockType", "DiscretePulseGenerator");
@@ -43,6 +51,6 @@ for idx = 1:numel(pulseBlocks)
 end
 
 set_param(model, "StopTime", string(stopTime));
-fprintf("Configured %g s %s case with pulse disturbances disabled.\n", ...
-    stopTime, caseMode);
+fprintf("Configured %g s %s case with %s wheel planning; NMPC enabled = %d.\n", ...
+    stopTime, caseMode, plannerMode, baseNmpc.enabled);
 end

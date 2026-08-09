@@ -1,27 +1,33 @@
-function ocp = base_nmpc_ocp(base, baseNmpc)
-%BASE_NMPC_OCP Build the 6-state floating-base acados OCP.
+function ocp = base_nmpc_ocp(base, leg, baseNmpc)
+%BASE_NMPC_OCP Build the planar 8-state base-wheel acados OCP.
 
 arguments
     base (1, 1) struct
+    leg (1, 1) struct
     baseNmpc (1, 1) struct
 end
 
 import casadi.*
 
-x = SX.sym('x', 6, 1);
+x = SX.sym('x', 8, 1);
 u = SX.sym('u', 3, 1);
-xdot = SX.sym('xdot', 6, 1);
+xdot = SX.sym('xdot', 8, 1);
 
 theta = x(3);
 rHBody = base.rHBody(:);
 rHx = cos(theta)*rHBody(1) - sin(theta)*rHBody(2);
 rHz = sin(theta)*rHBody(1) + cos(theta)*rHBody(2);
 
+rollingDenominator = leg.mw * leg.r + leg.Iw / leg.r;
+xiAcceleration = -u(1) / base.m ...
+    - (u(1) * leg.r + u(3)) / rollingDenominator;
 fExpl = [
     x(4:6);
     u(1) / base.m;
     u(2) / base.m - base.g;
-    (rHx*u(2) - rHz*u(1) + u(3)) / base.Iyy
+    (rHx*u(2) - rHz*u(1) + u(3)) / base.Iyy;
+    x(8);
+    xiAcceleration
 ];
 
 model = AcadosModel();
@@ -42,22 +48,28 @@ ocp.model = model;
 ocp.cost.cost_type_0 = 'NONLINEAR_LS';
 ocp.model.cost_y_expr_0 = stageCost;
 ocp.cost.W_0 = W;
-ocp.cost.yref_0 = zeros(9, 1);
+ocp.cost.yref_0 = zeros(11, 1);
 
 ocp.cost.cost_type = 'NONLINEAR_LS';
 ocp.model.cost_y_expr = stageCost;
 ocp.cost.W = W;
-ocp.cost.yref = zeros(9, 1);
+ocp.cost.yref = zeros(11, 1);
 
 ocp.cost.cost_type_e = 'NONLINEAR_LS';
 ocp.model.cost_y_expr_e = x;
 ocp.cost.W_e = baseNmpc.W_e;
-ocp.cost.yref_e = zeros(6, 1);
+ocp.cost.yref_e = zeros(8, 1);
 
 ocp.constraints.idxbu = (0:2).';
 ocp.constraints.lbu = baseNmpc.uMin(:);
 ocp.constraints.ubu = baseNmpc.uMax(:);
-ocp.constraints.x0 = base.xEq(:);
+ocp.constraints.idxbx = [6; 7];
+ocp.constraints.lbx = [baseNmpc.xiMin; -baseNmpc.dxiMax];
+ocp.constraints.ubx = [baseNmpc.xiMax;  baseNmpc.dxiMax];
+ocp.constraints.idxbx_e = [6; 7];
+ocp.constraints.lbx_e = ocp.constraints.lbx;
+ocp.constraints.ubx_e = ocp.constraints.ubx;
+ocp.constraints.x0 = baseNmpc.model.xEq(:);
 
 ocp.solver_options.N_horizon = baseNmpc.N;
 ocp.solver_options.tf = baseNmpc.N * baseNmpc.Ts;
