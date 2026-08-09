@@ -4,6 +4,8 @@ function test_force_based_wheel_position_reference()
 run(fullfile(fileparts(mfilename("fullpath")), "startup.m"));
 base = evalin("base", "base");
 baseLqr = evalin("base", "baseLqr");
+baseLqr.trajectory.mode = "velocity_round_trip";
+assignin("base", "baseLqr", baseLqr);
 ctrl = evalin("base", "ctrl");
 leg = evalin("base", "leg");
 traj = evalin("base", "traj");

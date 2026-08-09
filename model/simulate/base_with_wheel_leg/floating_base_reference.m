@@ -15,53 +15,29 @@ if ~getFieldOrDefault(trajectory, "enabled", false) || ~isfinite(t)
     return;
 end
 
-mode = lower(string(getFieldOrDefault(trajectory, "mode", "position")));
-if mode == "velocity_round_trip"
-    [xOffset, dxRef, ddxRef] = velocityRoundTrip(t, trajectory);
+mode = lower(string(getFieldOrDefault(trajectory, "mode", "stand")));
+switch mode
+    case "stand"
+        return;
+    case {"velocity", "velocity_round_trip"}
+        [xOffset, dxRef, ddxRef] = velocityRoundTrip(t, trajectory);
+        xRef(1) = xRef(1) + xOffset;
+        xRef(4) = xRef(4) + dxRef;
+        aRef(1) = ddxRef;
+    case "z"
+        % z uses the same smooth down/hold/recover profile previously named
+        % crouch, without adding horizontal motion.
+    otherwise
+        error("floating_base_reference:InvalidMode", ...
+            "Trajectory mode must be 'stand', 'z', or 'velocity'.");
+end
+
+if mode == "z" || mode == "velocity_round_trip"
     [zOffset, dzRef, ddzRef] = crouchProfile(t, trajectory);
-    xRef(1) = xRef(1) + xOffset;
     xRef(2) = xRef(2) + zOffset;
-    xRef(4) = xRef(4) + dxRef;
     xRef(5) = xRef(5) + dzRef;
-    aRef(1) = ddxRef;
     aRef(2) = ddzRef;
-    return;
 end
-
-settleTime = getFieldOrDefault(trajectory, "settleTime", 0);
-moveDuration = getFieldOrDefault(trajectory, "moveDuration", 0);
-holdDuration = getFieldOrDefault(trajectory, "holdDuration", 0);
-returnDuration = getFieldOrDefault(trajectory, "returnDuration", moveDuration);
-xStep = getFieldOrDefault(trajectory, "xStep", 0);
-zStep = getFieldOrDefault(trajectory, "zStep", 0);
-
-tMove = t - settleTime;
-tReturn = tMove - moveDuration - holdDuration;
-if tMove <= 0
-    [alpha, dalpha, ddalpha] = smoothStep(0, 1);
-elseif tMove < moveDuration
-    [alpha, dalpha, ddalpha] = smoothStep(tMove, moveDuration);
-elseif tReturn <= 0
-    alpha = 1;
-    dalpha = 0;
-    ddalpha = 0;
-elseif tReturn < returnDuration
-    [beta, dbeta, ddbeta] = smoothStep(tReturn, returnDuration);
-    alpha = 1 - beta;
-    dalpha = -dbeta;
-    ddalpha = -ddbeta;
-else
-    alpha = 0;
-    dalpha = 0;
-    ddalpha = 0;
-end
-
-xRef(1) = xRef(1) + xStep * alpha;
-xRef(2) = xRef(2) + zStep * alpha;
-xRef(4) = xRef(4) + xStep * dalpha;
-xRef(5) = xRef(5) + zStep * dalpha;
-aRef(1) = xStep * ddalpha;
-aRef(2) = zStep * ddalpha;
 end
 
 function [x, dx, ddx] = velocityRoundTrip(t, trajectory)

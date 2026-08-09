@@ -2,9 +2,9 @@ function [tau, debug] = controller_qp_core(x)
 %CONTROLLER_QP_CORE Shared implementation for QP inverse dynamics.
 persistent qpOptions zWarm
 
-if ~ismember(numel(x), [9, 10, 11, 12, 16])
+if numel(x) ~= 16
     error("controller_qp:InvalidInput", ...
-        "Expected fixed-hip 10D input or floating-base 16D input.");
+        "Expected the 16D floating-base controller input.");
 end
 
 leg = evalin("base", "leg");
@@ -124,70 +124,27 @@ debug.kneeQddMin = kneeQddMin;
 end
 
 function [qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg, aH)
-if numel(x) == 16
-    base = evalin("base", "base");
-    [qd, dqd, ddqd] = floating_base_leg_reference(t, x(2:7), ...
-        traj, leg, base, aH, x(14:15));
-else
-    [qd, dqd, ddqd] = wheel_leg_reference(t, traj, leg);
-end
+base = evalin("base", "base");
+[qd, dqd, ddqd] = floating_base_leg_reference(t, x(2:7), ...
+    traj, leg, base, aH, x(14:15));
 end
 
 function [q, dq, FH_ext, MBy_des, vH, aH] = parseControllerInput(x)
-% Supported layouts:
-%   9:  [t; q; dq; FHx_ext; FHz_ext]
-%   10: [t; q; dq; FHx_ext; FHz_ext; MBy_des]  formal Simulink interface
-%   11: [t; q; dq; Fcx; Fcz; FHx_ext; FHz_ext]
-%   12: [t; q; dq; Fcx; Fcz; FHx_ext; FHz_ext; MBy_des]
-%   16: [t; xB; zB; thetaB; dxB; dzB; dthetaB;
+% x = [t; xB; zB; thetaB; dxB; dzB; dthetaB;
 %        qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des]
 %
-% In the 16D floating-base layout, qh is the hip joint angle relative to the
-% base. The fixed-hip leg model uses the absolute thigh angle, so qh_abs =
-% thetaB + qh. The hip velocity and command acceleration are included in the
-% rolling contact constraint.
-switch numel(x)
-    case 9
-        q = x(2:4);
-        dq = x(5:7);
-        FH_ext = x(8:9);
-        MBy_des = NaN;
-        [vH, aH] = hipMotionTerms(x(1));
-    case 10
-        q = x(2:4);
-        dq = x(5:7);
-        FH_ext = x(8:9);
-        MBy_des = x(10);
-        [vH, aH] = hipMotionTerms(x(1));
-    case 11
-        q = x(2:4);
-        dq = x(5:7);
-        FH_ext = x(10:11);
-        MBy_des = NaN;
-        [vH, aH] = hipMotionTerms(x(1));
-    case 12
-        q = x(2:4);
-        dq = x(5:7);
-        FH_ext = x(10:11);
-        MBy_des = x(12);
-        [vH, aH] = hipMotionTerms(x(1));
-    case 16
-        ctrl = evalin("base", "ctrl");
-        baseState = x(2:7);
-        qRel = x(8:10);
-        dqRel = x(11:13);
-        FH_ext = x(14:15);
-        MBy_des = x(16);
-        basePitchToAbsHipSign = getCtrlField(ctrl, ...
-            "basePitchToAbsHipSign", 1);
-        q = [qRel(1) + basePitchToAbsHipSign * baseState(3); ...
-            qRel(2); qRel(3)];
-        dq = [dqRel(1) + basePitchToAbsHipSign * baseState(6); ...
-            dqRel(2); dqRel(3)];
-        [vH, aH] = floatingHipMotionTerms(baseState, FH_ext, MBy_des);
-    otherwise
-        error("controller_qp:InvalidInput", "Unsupported input width.");
-end
+% qh is relative to the base; the analytic leg model uses absolute thigh
+% angle. Hip velocity and acceleration enter the rolling constraint.
+ctrl = evalin("base", "ctrl");
+baseState = x(2:7);
+qRel = x(8:10);
+dqRel = x(11:13);
+FH_ext = x(14:15);
+MBy_des = x(16);
+pitchSign = getCtrlField(ctrl, "basePitchToAbsHipSign", 1);
+q = [qRel(1) + pitchSign * baseState(3); qRel(2:3)];
+dq = [dqRel(1) + pitchSign * baseState(6); dqRel(2:3)];
+[vH, aH] = floatingHipMotionTerms(baseState, FH_ext, MBy_des);
 end
 
 function [vH, aH] = floatingHipMotionTerms(baseState, FH_ext, MBy_des)
@@ -223,18 +180,6 @@ rWorld = [
     cos(theta)*rx0 - sin(theta)*rz0;
     sin(theta)*rx0 + cos(theta)*rz0
 ];
-end
-
-function [vH, aH] = hipMotionTerms(t)
-if evalin("base", "exist('hip', 'var')")
-    hip = evalin("base", "hip");
-    [~, dpHRef, ddpHRef] = hip_reference_trajectory(t, hip);
-    vH = dpHRef(:);
-    aH = ddpHRef(:);
-else
-    vH = zeros(2, 1);
-    aH = zeros(2, 1);
-end
 end
 
 function value = getCtrlField(ctrl, fieldName, defaultValue)

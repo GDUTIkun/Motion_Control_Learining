@@ -1,4 +1,4 @@
-function [base, leg, hip, baseLqr] = set_initial_base_state(x0Request)
+function [base, leg, baseLqr] = set_initial_base_state(x0Request)
 %SET_INITIAL_BASE_STATE Set a consistent floating-base initial condition.
 %
 % x0Request = [xOffset; zOffset; thetaB; dxB; dzB; dthetaB]
@@ -22,7 +22,6 @@ base = evalin("base", "base");
 leg = evalin("base", "leg");
 ctrl = evalin("base", "ctrl");
 traj = evalin("base", "traj");
-hip = evalin("base", "hip");
 
 theta0 = x0Request(3);
 dtheta0 = x0Request(6);
@@ -45,7 +44,9 @@ end
 basePos0 = basePosEq + x0Request(1:2) + rHEq - rH0;
 base.x0 = [basePos0; theta0; x0Request(4:5); dtheta0];
 
-[qAbs0, dqAbs0, ddqAbs0] = wheel_leg_reference(0, traj, leg);
+qAbs0 = [traj.qJoint0; traj.qw0];
+dqAbs0 = [traj.dqJoint0; 0];
+ddqAbs0 = [traj.ddqJoint0; 0];
 basePitchToAbsHipSign = 1;
 if isfield(ctrl, "basePitchToAbsHipSign")
     basePitchToAbsHipSign = ctrl.basePitchToAbsHipSign;
@@ -65,7 +66,6 @@ end
 
 assignin("base", "base", base);
 assignin("base", "leg", leg);
-assignin("base", "hip", hip);
 if ~isempty(baseLqr)
     assignin("base", "baseLqr", baseLqr);
 end

@@ -78,10 +78,9 @@ srcBlocks = [
     subsys + "/PS-Simulink" + newline + "Converter2";
     subsys + "/PS-Simulink" + newline + "Converter9";
     subsys + "/PS-Simulink" + newline + "Converter10";
-    subsys + "/PS-Simulink" + newline + "Converter11"
+    subsys + "/PS-Simulink" + newline + "Converter11";
 ];
 
-ctrlHandles = get_param(ctrlMux, "PortHandles");
 for k = 1:numel(srcBlocks)
     connectBlockOutToInput(subsys, srcBlocks(k), 1, ctrlMux, k);
 end

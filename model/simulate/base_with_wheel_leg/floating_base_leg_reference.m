@@ -60,8 +60,7 @@ drdtheta = [-rH(2); rH(1)];
 pH = baseState(1:2) + rH;
 vH = baseState(4:5) + dtheta * drdtheta;
 
-groundTop = getFieldOrDefault(hipFromBase(), "groundTopY", ...
-    getFieldOrDefault(base, "simscapeGroundTopY", 0));
+groundTop = getFieldOrDefault(base, "simscapeGroundTopY", 0);
 wheelCenterZ = groundTop + leg.r;
 
 [rXDes, drXDes, ddrXDes, aB, plan] = plannedWheelOffset(t, baseState, ...
@@ -231,14 +230,6 @@ qw = qw0 - (wheelX - wheelX0) / leg.r ...
     - (sum(qJoint) - thetaWheelBase0);
 dqw = -wheelDx / leg.r - sum(dqJoint);
 ddqw = -wheelDdx / leg.r - sum(ddqJoint);
-end
-
-function hip = hipFromBase()
-if evalin("base", "exist('hip', 'var')")
-    hip = evalin("base", "hip");
-else
-    hip = struct();
-end
 end
 
 function p = projectToReachableAnnulus(p, leg)

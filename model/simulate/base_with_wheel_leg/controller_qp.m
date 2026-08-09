@@ -12,11 +12,7 @@ function tau = controller_qp(x)
 %   Fcz >= 0
 %   |Fcx| <= mu*Fcz
 %
-% Input:
-%   x = [t; qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext]
-% or:
-%   x = [t; qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des]
-% or, for the floating-base plant:
+% Input for the maintained floating-base plant:
 %   x = [t; xB; zB; thetaB; dxB; dzB; dthetaB;
 %        qh; qk; qw; dqh; dqk; dqw; FHx_ext; FHz_ext; MBy_des]
 %
