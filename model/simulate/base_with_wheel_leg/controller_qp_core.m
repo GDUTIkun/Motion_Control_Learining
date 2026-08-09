@@ -28,47 +28,47 @@ kin = wheel_leg_kinematics(q, dq, [], leg);
 Kc = getCtrlField(ctrl, "constraintVelocityGain", 0);
 bc = -kin.dJc * dq - aH - Kc * (kin.Jc * dq + vH);
 
-% z = [qdd; tau; Fc]
+% z = [qdd; tau; Fc; sExtFx; sExtFz; sM]
 wQdd = getCtrlVec(ctrl, "qpWqdd", [1; 1; 1]);
 wTau = getCtrlVec(ctrl, "qpWtau", 1e-5 * [1; 1; 1]);
 wFc = getCtrlVec(ctrl, "qpWFc", 1e-5 * [1; 1]);
+slackScale = getCtrlVec(ctrl, "qpSlackScale", [140; 140; 160]);
+wSlack = getCtrlVec(ctrl, "qpWslack", 1e4 * ones(3, 1));
+hipMomentSign = getCtrlField(ctrl, "hipMomentToTauSign", 1);
 
-tauRef = zeros(3, 1);
-if isfinite(MBy_des)
-    tauRef(1) = getCtrlField(ctrl, "hipMomentToTauSign", 1) * MBy_des;
-end
-
-H = diag([wQdd; wTau; wFc]);
-H = H + 1e-9 * eye(8);
-f = [-wQdd .* qddCmd; -wTau .* tauRef; zeros(2, 1)];
+H = diag([wQdd; wTau; wFc; wSlack ./ (slackScale.^2)]);
+H = H + 1e-9 * eye(11);
+f = [-wQdd .* qddCmd; zeros(8, 1)];
 
 Aeq = [
-    M, -eye(3), -kin.Jc';
-    kin.Jc, zeros(2, 3), zeros(2, 2)
+    M, -eye(3), -kin.Jc', -kin.JH', zeros(3, 1);
+    kin.Jc, zeros(2, 3), zeros(2, 2), zeros(2, 3);
+    zeros(1, 3), [1, 0, 0], zeros(1, 2), [0, 0, -hipMomentSign]
 ];
 beq = [
     kin.JH' * FH_ext - C - G;
-    bc
+    bc;
+    hipMomentSign * MBy_des
 ];
 
 mu = getCtrlField(ctrl, "mu", 0.8);
 Aineq = [
-    zeros(1, 6),  1, -mu;
-    zeros(1, 6), -1, -mu;
-    zeros(1, 6),  0, -1
+    zeros(1, 6),  1, -mu, zeros(1, 3);
+    zeros(1, 6), -1, -mu, zeros(1, 3);
+    zeros(1, 6),  0, -1, zeros(1, 3)
 ];
 bineq = zeros(3, 1);
 if isfinite(kneeQddMin)
-    Aineq = [Aineq; 0, -1, 0, zeros(1, 5)];
+    Aineq = [Aineq; 0, -1, 0, zeros(1, 8)];
     bineq = [bineq; -kneeQddMin];
 end
 
 tauMax = ctrl.tauMax(:);
-lb = [-inf(3, 1); -tauMax; -inf; 0];
-ub = [ inf(3, 1);  tauMax;  inf; inf];
+lb = [-inf(3, 1); -tauMax; -inf; 0; -inf(3, 1)];
+ub = [ inf(3, 1);  tauMax;  inf; inf;  inf(3, 1)];
 
-z0 = [qddCmd; zeros(3, 1); 0; max(0, sum([leg.m1, leg.m2, leg.mw]) * leg.g)];
-if t <= 0 || isempty(zWarm) || numel(zWarm) ~= 8 || any(~isfinite(zWarm))
+z0 = [qddCmd; zeros(3, 1); 0; max(0, sum([leg.m1, leg.m2, leg.mw]) * leg.g); zeros(3, 1)];
+if t <= 0 || isempty(zWarm) || numel(zWarm) ~= 11 || any(~isfinite(zWarm))
     zWarm = z0;
 elseif getCtrlField(ctrl, "qpWarmStart", true)
     z0 = zWarm;
@@ -104,10 +104,12 @@ if isempty(z) || exitflag <= 0 || any(~isfinite(z))
     end
     qddSol = qddCmd;
     FcSol = zeros(2, 1);
+    slackExt = nan(3, 1);
 else
     qddSol = z(1:3);
     tau = z(4:6);
     FcSol = z(7:8);
+    slackExt = z(9:11);
     zWarm = z;
 end
 
@@ -119,8 +121,13 @@ debug.Fc = FcSol(:);
 debug.exitflag = exitflag;
 debug.FH_ext = FH_ext(:);
 debug.MBy_des = MBy_des;
-debug.tauRef = tauRef(:);
+debug.tauRef = zeros(3, 1);
 debug.kneeQddMin = kneeQddMin;
+debug.qpFeasible = exitflag > 0 && all(isfinite(slackExt));
+debug.wrenchSlack = [-slackExt(1:2); slackExt(3)];
+debug.wrenchCommand = [-FH_ext(:); MBy_des];
+debug.wrenchFeasible = debug.wrenchCommand + debug.wrenchSlack;
+debug.wrenchSlackNorm = norm(debug.wrenchSlack ./ slackScale);
 end
 
 function [qd, dqd, ddqd] = controllerLegReference(t, x, traj, leg, aH)

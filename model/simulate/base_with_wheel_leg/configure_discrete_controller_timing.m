@@ -38,10 +38,14 @@ end
 function setTopLevelInputZoh(model, TsExpr)
 plant = model + "/PD_only";
 matches = find_system(model, "SearchDepth", 1, "BlockType", "MATLABFcn", ...
-    "MATLABFcn", "controller_qp");
+    "MATLABFcn", "controller_qp_signal");
+if isempty(matches)
+    matches = find_system(model, "SearchDepth", 1, "BlockType", "MATLABFcn", ...
+        "MATLABFcn", "controller_qp");
+end
 if isempty(matches)
     error("configure_discrete_controller_timing:MissingController", ...
-        "Could not find top-level controller_qp MATLAB Function block.");
+        "Could not find the top-level QP MATLAB Function block.");
 end
 controller = matches{1};
 zoh = ensureBlock("simulink/Discrete/Zero-Order Hold", ...

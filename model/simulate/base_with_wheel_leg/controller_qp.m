@@ -2,11 +2,12 @@ function tau = controller_qp(x)
 %CONTROLLER_QP Small QP inverse dynamics with contact constraints.
 %
 % Decision variable:
-%   z = [qdd(3); tau(3); Fc(2)]
+%   z = [qdd(3); tau(3); Fc(2); wrenchSlack(3)]
 %
 % Equality constraints:
-%   M*qdd - tau - Jc'*Fc = JH'*FH_ext - C - G
+%   M*qdd - tau - Jc'*Fc - JH'*sF = JH'*FH_ext - C - G
 %   Jc*qdd = -dJc*dq - aH - Kc*(Jc*dq + vH)
+%   tau_h = hipMomentToTauSign*(MBy_des + sM)
 %
 % Inequality constraints:
 %   Fcz >= 0

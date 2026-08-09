@@ -93,7 +93,11 @@ data.status = namedData(logs, "nmpcStatus");
 data.cpuTime = namedData(logs, "nmpcCpuTime");
 data.fallback = namedData(logs, "nmpcFallback");
 data.bodyWrench = namedData(logs, "nmpcBodyWrench");
-[data.torque, ~] = pathData(logs, 3, "source/Interpreted MATLAB Function");
+[qpSignal, ~] = pathData(logs, 10, "source/Interpreted MATLAB Function");
+data.torque = qpSignal(:, 1:3);
+data.qpWrenchSlack = qpSignal(:, 4:6);
+data.qpWrenchFeasible = qpSignal(:, 7:9);
+data.qpWrenchSlackNorm = qpSignal(:, 10);
 [data.lqrCommand, data.lqrTime] = pathData(logs, 3, ...
     "source/PD_only/Interpreted MATLAB Function");
 [data.controllerInput, data.controllerTime] = pathData(logs, 16, ...

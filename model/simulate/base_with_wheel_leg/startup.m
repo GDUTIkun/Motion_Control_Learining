@@ -167,7 +167,7 @@ base.command = @(x) floating_base_lqr_command(x, baseLqr);
 % Upper-layer NMPC configuration. Solver generation is deliberately kept out
 % of startup; use build_base_nmpc_solver when the generated S-Function is absent.
 baseNmpc = struct();
-baseNmpc.enabled = true;
+baseNmpc.enabled = false;
 baseNmpc.Ts = 0.005;
 baseNmpc.N = 50;
 baseNmpc.Q = base.Q;
