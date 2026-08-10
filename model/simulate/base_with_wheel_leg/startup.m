@@ -152,7 +152,7 @@ base.thetaIntegralLimit = 0.5;
 % Horizontal constant-speed comparison: forward, stop, then reverse home.
 base.trajectory = struct();
 base.trajectory.enabled = true;
-base.trajectory.mode = "velocity";
+base.trajectory.mode = "stand";
 base.trajectory.settleTime = 1.0;
 base.trajectory.cruiseVelocity = 0.5;
 base.trajectory.accelDuration = 0.5;
