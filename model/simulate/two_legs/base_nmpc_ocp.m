@@ -13,19 +13,15 @@ x = SX.sym('x', 8, 1);
 u = SX.sym('u', 3, 1);
 xdot = SX.sym('xdot', 8, 1);
 
-theta = x(3);
-rHBody = base.rHBody(:);
-rHx = cos(theta)*rHBody(1) - sin(theta)*rHBody(2);
-rHz = sin(theta)*rHBody(1) + cos(theta)*rHBody(2);
-
 rollingDenominator = leg.mw * leg.r + leg.Iw / leg.r;
-xiAcceleration = -u(1) / base.m ...
+xiAcceleration = -u(1) / baseNmpc.model.m ...
     - (u(1) * leg.r + u(3)) / (2 * rollingDenominator);
 fExpl = [
     x(4:6);
-    u(1) / base.m;
-    u(2) / base.m - base.g;
-    (rHx*u(2) - rHz*u(1) + u(3)) / base.Iyy;
+    u(1) / baseNmpc.model.m;
+    u(2) / baseNmpc.model.m - base.g;
+    ((x(7) - baseNmpc.model.xiEq)*u(2) ...
+        - baseNmpc.model.rWzEq*u(1) + u(3)) / base.Iyy;
     x(8);
     xiAcceleration
 ];
@@ -37,9 +33,15 @@ model.u = u;
 model.xdot = xdot;
 model.f_expl_expr = fExpl;
 model.f_impl_expr = xdot - fExpl;
+model.con_h_expr = [
+    u(1) - baseNmpc.driveCoefficient*u(2);
+   -u(1) - baseNmpc.driveCoefficient*u(2)
+];
 
-stageCost = vertcat(x, u);
-W = blkdiag(baseNmpc.Q, baseNmpc.R);
+% The duplicated input channel lets yref carry the previous applied wrench,
+% reproducing the paper's input-increment penalty without adding OCP states.
+stageCost = vertcat(x, u, u);
+W = blkdiag(baseNmpc.Q, baseNmpc.R1, baseNmpc.R2);
 
 ocp = AcadosOcp();
 ocp.name = char(baseNmpc.solverName);
@@ -48,12 +50,12 @@ ocp.model = model;
 ocp.cost.cost_type_0 = 'NONLINEAR_LS';
 ocp.model.cost_y_expr_0 = stageCost;
 ocp.cost.W_0 = W;
-ocp.cost.yref_0 = zeros(11, 1);
+ocp.cost.yref_0 = zeros(14, 1);
 
 ocp.cost.cost_type = 'NONLINEAR_LS';
 ocp.model.cost_y_expr = stageCost;
 ocp.cost.W = W;
-ocp.cost.yref = zeros(11, 1);
+ocp.cost.yref = zeros(14, 1);
 
 ocp.cost.cost_type_e = 'NONLINEAR_LS';
 ocp.model.cost_y_expr_e = x;
@@ -63,6 +65,8 @@ ocp.cost.yref_e = zeros(8, 1);
 ocp.constraints.idxbu = (0:2).';
 ocp.constraints.lbu = baseNmpc.uMin(:);
 ocp.constraints.ubu = baseNmpc.uMax(:);
+ocp.constraints.lh = -1e9 * ones(2, 1);
+ocp.constraints.uh = zeros(2, 1);
 ocp.constraints.idxbx = [6; 7];
 ocp.constraints.lbx = [baseNmpc.xiMin; -baseNmpc.dxiMax];
 ocp.constraints.ubx = [baseNmpc.xiMax;  baseNmpc.dxiMax];

@@ -67,6 +67,8 @@ names = [
     "NMPC Command Guard"
     "NMPC Guard Split"
     "NMPC Fallback Terminator"
+    "NMPC Previous Input"
+    "NMPC Fault Terminator"
 ];
 for i = 1:numel(names)
     deleteBlockIfPresent(subsystem + "/" + names(i));

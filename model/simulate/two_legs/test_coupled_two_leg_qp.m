@@ -6,6 +6,7 @@ base = evalin("base", "base");
 leg = evalin("base", "leg");
 ctrl = evalin("base", "ctrl");
 wheelLqr = evalin("base", "wheelLqr");
+baseNmpc = evalin("base", "baseNmpc");
 
 wheelReference = [wheelLqr.neutral; 0; 0; wheelLqr.neutral];
 upperCommand = [0; -base.m*base.g; 0];
@@ -28,8 +29,11 @@ assert(norm(debug.wrenchFeasible - ...
 
 % The deployed reduced QP may use common-mode-specific task priorities, but
 % it must remain symmetric, feasible, and dynamically consistent.
+upperCommandCommon = [-baseNmpc.model.uEq(1:2); baseNmpc.model.uEq(3)];
+xCommon = x;
+xCommon(20:22) = upperCommandCommon;
 clear coupled_two_leg_qp_core
-[tauCommon, common] = coupled_two_leg_qp_core(x, "common");
+[tauCommon, common] = coupled_two_leg_qp_core(xCommon, "common");
 assert(common.commonMode && common.qpFeasible);
 assert(norm(tauCommon(1:3) - tauCommon(4:6), inf) < 1e-10);
 assert(norm(common.FcLeft - common.FcRight, inf) < 1e-10);
@@ -41,23 +45,6 @@ assert(isequal(size(common.massMatrix), [6, 6]));
 assert(min(eig(common.massMatrix)) > 0);
 assert(norm(common.qdd(1:6), inf) < 1e-4, ...
     "The nominal common-mode state must be a static QP equilibrium.");
-
-% With identical objective weights and inactive common-only slack bounds,
-% the reduced QP is the exact symmetric restriction of the full QP.
-ctrlEquivalent = ctrl;
-ctrlEquivalent.commonModeQpWqdd = ctrlEquivalent.qpWqdd;
-ctrlEquivalent.commonModeMomentSlackMax = inf;
-restoreCtrl = onCleanup(@() assignin("base", "ctrl", ctrl));
-assignin("base", "ctrl", ctrlEquivalent);
-clear coupled_two_leg_qp_core
-[tauFullEquivalent, fullEquivalent] = coupled_two_leg_qp_core(x, "full");
-clear coupled_two_leg_qp_core
-[tauCommonEquivalent, commonEquivalent] = coupled_two_leg_qp_core(x, "common");
-assert(norm(tauCommonEquivalent - tauFullEquivalent, inf) < 1e-5);
-assert(norm(commonEquivalent.FcLeft - fullEquivalent.FcLeft, inf) < 1e-5);
-assert(norm(commonEquivalent.wrenchFeasible - ...
-    fullEquivalent.wrenchFeasible, inf) < 1e-7);
-assignin("base", "ctrl", ctrl);
 
 % A differential leg perturbation must produce differential acceleration
 % and torque; otherwise the independent left/right mode is uncontrolled.
@@ -73,6 +60,11 @@ x(20:22) = upperCommand;
 [~, pulse] = coupled_two_leg_qp_core(x);
 assert(pulse.qpFeasible && pulse.wrenchFeasible(1) > 0);
 assert(abs(pulse.wrenchSlack(1)) < abs(pulse.wrenchCommand(1)));
+
+xCommon(20) = 20;
+[~, commonPulse] = coupled_two_leg_qp_core(xCommon, "common");
+assert(commonPulse.qpFeasible && commonPulse.wrenchFeasible(1) < 0);
+assert(abs(commonPulse.wrenchSlack(1)) < abs(commonPulse.wrenchCommand(1)));
 
 fprintf("Coupled two-leg floating-base QP checks passed.\n");
 end

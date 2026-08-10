@@ -58,15 +58,22 @@ end
 
 qFull = [baseState(1:3); qLeft; qRight];
 dqFull = [baseState(4:6); dqLeft; dqRight];
-[M, h, Jc, dJcDq] = floatingBaseDynamics(qFull, dqFull, base, leg);
+[M, h, Jc, dJcDq, wheelData] = floatingBaseDynamics( ...
+    qFull, dqFull, base, leg);
 if mode == "common" && isfield(ctrl, "commonModeJointDamping")
     jointDamping = ctrl.commonModeJointDamping(:);
     h(4:6) = h(4:6) + jointDamping .* dqLeft;
     h(7:9) = h(7:9) + jointDamping .* dqRight;
 end
 
+commandModel = base;
+if mode == "common" && evalin("base", "exist('baseNmpc', 'var')") == 1
+    baseNmpc = evalin("base", "baseNmpc");
+    commandModel.m = baseNmpc.model.m;
+    commandModel.Iyy = baseNmpc.model.Iyy;
+end
 [baseQddCmd, aHCmd] = desiredBaseAcceleration(baseState, ...
-    wrenchCommand, base);
+    wrenchCommand, commandModel);
 perLegForce = base.symmetricLoadShare * upperCommand(1:2);
 [qd, dqd, ddqd] = floating_base_leg_reference(t, ...
     baseState, traj, leg, base, aHCmd, perLegForce, true, ...
@@ -106,20 +113,20 @@ S(7:9, 4:6) = diag(tauSign);
 Kc = getCtrlField(ctrl, "constraintVelocityGain", 0);
 contactRhs = -dJcDq - Kc * (Jc * dqFull);
 
-[DwReduced, wrenchOffset] = baseWrenchMap(baseState(3), base);
-Dw = zeros(3, 9);
-Dw(:, 1:3) = DwReduced(:, 1:3);
-wrenchRhs = wrenchCommand - wrenchOffset;
-
 if mode == "common"
     [tau, debug, zWarmCommon, qpOptions] = solveCommonModeQp( ...
         t, baseQddCmd, qddLeftCmd, qddRightCmd, ...
         kneeMinLeft, kneeMinRight, M, h, Jc, contactRhs, ...
-        S, DwReduced, wrenchOffset, wrenchRhs, ...
+        S, wheelData, wrenchCommand, ...
         wBaseQdd, wLegQdd, wTau, wFc, wSlack, slackScale, ...
         base, leg, ctrl, zWarmCommon, qpOptions);
     return;
 end
+
+[DwReduced, wrenchOffset] = baseWrenchMap(baseState(3), base);
+Dw = zeros(3, 9);
+Dw(:, 1:3) = DwReduced(:, 1:3);
+wrenchRhs = wrenchCommand - wrenchOffset;
 
 Aeq = [
     M, -S, -Jc', zeros(9, 3);
@@ -216,7 +223,7 @@ end
 function [tau, debug, zWarm, qpOptions] = solveCommonModeQp( ...
         t, baseQddCmd, qddLeftCmd, qddRightCmd, ...
         kneeMinLeft, kneeMinRight, M, h, Jc, contactRhs, ...
-        S, Dw, wrenchOffset, wrenchRhs, ...
+        S, wheelData, wrenchCommand, ...
         wBaseQdd, wLegQdd, wTau, wFc, wSlack, slackScale, ...
         base, leg, ctrl, zWarm, qpOptions)
 % Restrict the full two-leg dynamics to qL=qR without approximating the
@@ -230,6 +237,9 @@ hr = Tq' * h;
 Sr = Tq' * S * Ttau;
 Jforce = Tq' * Jc' * Tlambda;
 Jrolling = Jc(1:2, :) * Tq;
+[DwcQdd, DwcForce, wrenchOffset] = commonInteractionWrenchMap( ...
+    wheelData, Tq, leg);
+wrenchRhs = wrenchCommand - wrenchOffset;
 
 qddLegCmd = 0.5 * (qddLeftCmd + qddRightCmd);
 qddTarget = [baseQddCmd; qddLegCmd];
@@ -241,7 +251,7 @@ f = [-weights(1:6) .* qddTarget; zeros(8, 1)];
 Aeq = [
     Mr, -Sr, -Jforce, zeros(6, 3);
     Jrolling, zeros(2, 8);
-    Dw, zeros(3, 5), -eye(3)
+    DwcQdd, zeros(3, 3), DwcForce, -eye(3)
 ];
 beq = [-hr; contactRhs(1:2); wrenchRhs];
 
@@ -311,7 +321,8 @@ tau = Ttau * tauPerLeg;
 contactPerLeg = z(10:11);
 contactForce = Tlambda * contactPerLeg;
 wrenchSlack = z(12:14);
-wrenchFeasible = Dw * qddReduced + wrenchOffset;
+wrenchFeasible = DwcQdd*qddReduced ...
+    + DwcForce*contactPerLeg + wrenchOffset;
 
 eqResidual = Aeq * z - beq;
 ineqResidual = Aineq * z - bineq;
@@ -369,7 +380,7 @@ D(3, 1:3) = [rH(2)*base.m, -rH(1)*base.m, base.Iyy];
 offset = [0; base.m*base.g; -rH(1)*base.m*base.g];
 end
 
-function [M, h, Jc, dJcDq] = floatingBaseDynamics(q, dq, base, leg)
+function [M, h, Jc, dJcDq, wheelData] = floatingBaseDynamics(q, dq, base, leg)
 n = 9;
 M = zeros(n);
 h = zeros(n, 1);
@@ -379,6 +390,9 @@ M(3, 3) = base.Iyy;
 h(2) = base.m * base.g;
 Jc = zeros(4, n);
 dJcDq = zeros(4, 1);
+wheelData.J = zeros(2, n, 2);
+wheelData.bias = zeros(2, 2);
+wheelData.W = zeros(1, n, 2);
 
 theta = q(3);
 dtheta = dq(3);
@@ -404,6 +418,9 @@ for side = 1:2
     W1 = angularJacobian(n, first, 0);
     W2 = angularJacobian(n, first, 1);
     Ww = angularJacobian(n, first, 2);
+    wheelData.J(:, :, side) = Jw;
+    wheelData.bias(:, side) = bw;
+    wheelData.W(:, :, side) = Ww;
 
     M = M + leg.m1*(J1'*J1) + leg.I1*(W1'*W1) ...
         + leg.m2*(J2'*J2) + leg.I2*(W2'*W2) ...
@@ -419,6 +436,23 @@ for side = 1:2
     dJcDq(rows) = bw;
 end
 M = (M + M') / 2;
+end
+
+function [Dqdd, Dforce, offset] = commonInteractionWrenchMap( ...
+        wheelData, Tq, leg)
+% Total wheel-to-body interaction wrench from the two wheel rigid bodies.
+Dqdd = zeros(3, 6);
+Dforce = zeros(3, 2);
+offset = zeros(3, 1);
+for side = 1:2
+    J = wheelData.J(:, :, side) * Tq;
+    W = wheelData.W(:, :, side) * Tq;
+    bias = wheelData.bias(:, side);
+    Dqdd = Dqdd + [-leg.mw*J(1, :); -leg.mw*J(2, :); -leg.Iw*W];
+    Dforce = Dforce + [1, 0; 0, 1; leg.r, 0];
+    offset = offset + [-leg.mw*bias(1); ...
+        -leg.mw*bias(2) - leg.mw*leg.g; 0];
+end
 end
 
 function [J, bias] = pointKinematics(JHip, hipBias, first, ...

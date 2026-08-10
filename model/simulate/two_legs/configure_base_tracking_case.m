@@ -47,7 +47,7 @@ elseif caseMode == "z"
     trajectory.crouchDepth = 0.025;
 end
 traj.wheelPositionPlanner = plannerMode;
-baseNmpc.enabled = caseMode == "velocity" && plannerMode == "lqr";
+baseNmpc.enabled = true;
 base.trajectory = trajectory;
 baseLqr.trajectory = trajectory;
 assignin("base", "base", base);
@@ -62,6 +62,6 @@ for idx = 1:numel(pulseBlocks)
 end
 
 set_param(model, "StopTime", string(stopTime));
-fprintf("Configured %s: %g s %s case with %s wheel planning; NMPC enabled = %d.\n", ...
+fprintf("Configured %s: %g s %s case with %s wheel planning; direct NMPC enabled = %d.\n", ...
     model, stopTime, caseMode, plannerMode, baseNmpc.enabled);
 end

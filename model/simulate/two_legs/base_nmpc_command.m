@@ -1,38 +1,39 @@
 function y = base_nmpc_command(x, baseNmpc)
-%BASE_NMPC_COMMAND Validate NMPC output and select the lower-QP command.
+%BASE_NMPC_COMMAND Validate the direct NMPC output for the lower QP.
 %
-% x = [NMPC body wrench(3); status; CPU time; LQR QP command(3)]
-% y = [selected QP command(3); fallback active]
+% x = [time; NMPC wheel-to-body interaction wrench(3); status; CPU time]
+% y = [selected QP command(3); solver fault active]
 
 if nargin < 2 || isempty(baseNmpc)
     baseNmpc = evalin("base", "baseNmpc");
 end
 
 x = double(x(:));
-if numel(x) ~= 8
-    error("base_nmpc_command:InvalidInput", "Expected an 8-element input.");
+if numel(x) ~= 6
+    error("base_nmpc_command:InvalidInput", "Expected a 6-element input.");
 end
 
-uBody = x(1:3);
-status = x(4);
-cpuTime = x(5);
-lqrCommand = x(6:8);
+time = x(1);
+uBody = x(2:4);
+status = x(5);
+cpuTime = x(6);
 valid = baseNmpc.enabled && status == 0 ...
     && all(isfinite(uBody)) && isfinite(cpuTime) ...
     && cpuTime <= baseNmpc.maxSolveTime;
 
-if valid
-    nmpcCommand = [-uBody(1:2); uBody(3)];
-    blend = 1;
-    if isfield(baseNmpc, "commandBlend")
-        blend = min(max(double(baseNmpc.commandBlend), 0), 1);
-    end
-    command = lqrCommand + blend * (nmpcCommand - lqrCommand);
-    fallback = 0;
-else
-    command = lqrCommand;
-    fallback = 1;
+persistent lastCommand
+equilibriumCommand = [-baseNmpc.model.uEq(1:2); baseNmpc.model.uEq(3)];
+if time <= 0 || isempty(lastCommand) || any(~isfinite(lastCommand))
+    lastCommand = equilibriumCommand;
 end
 
-y = [command; fallback];
+if valid
+    lastCommand = [-uBody(1:2); uBody(3)];
+end
+
+% At model initialization the equilibrium command is intentional.  The
+% solver output may not yet have a meaningful timing sample, so t = 0 is
+% not a runtime solver fault.
+faultActive = time > 0 && ~valid;
+y = [lastCommand; faultActive];
 end

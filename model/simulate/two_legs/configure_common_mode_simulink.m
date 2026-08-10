@@ -109,11 +109,12 @@ connect(subsystem, split, 2, sumBlock, 2);
 connect(subsystem, sumBlock, 1, leftSplit, 1);
 
 setZeroPulseAmplitude(model);
+configure_base_nmpc_simulink(false, model);
 set_param(model, "SimulationCommand", "update");
 if doSave
     save_system(model, [], "OverwriteIfChangedOnDisk", true);
 end
-fprintf("Configured strict common-mode LQR-QP control in %s.\n", model);
+fprintf("Configured strict common-mode NMPC-QP control in %s.\n", model);
 end
 
 function value = named(parent, prefix, suffix)

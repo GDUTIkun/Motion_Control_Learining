@@ -2,8 +2,8 @@ function reference = base_nmpc_reference(x, baseLqr, baseNmpc, wheelLqr)
 %BASE_NMPC_REFERENCE Return flattened S-Function references over the horizon.
 %
 % Layout:
-%   [y_ref_0(11); y_ref(stages 1:N-1, 11 each); y_ref_e(8)]
-% Simulink input: [t; xiRef; dxiRef; ddxiRef; xiRaw].
+%   [y_ref_0(14); y_ref(stages 1:N-1, 14 each); y_ref_e(8)]
+% Simulink input: [t; xiRef; dxiRef; ddxiRef; xiRaw; previousWrench(3)].
 
 if nargin < 2 || isempty(baseLqr)
     baseLqr = evalin("base", "baseLqr");
@@ -19,15 +19,17 @@ x = double(x(:));
 if isscalar(x)
     t = x;
     planner = [wheelLqr.neutral; 0; 0; wheelLqr.neutral];
-elseif numel(x) == 5
+    previousWrench = baseNmpc.model.uEq(:);
+elseif numel(x) == 8
     t = x(1);
     planner = x(2:5);
+    previousWrench = x(6:8);
 else
     error("base_nmpc_reference:InvalidInput", ...
-        "Expected t or [t; xiRef; dxiRef; ddxiRef; xiRaw].");
+        "Expected t or [t; planner(4); previousWrench(3)].");
 end
 N = baseNmpc.N;
-pathReference = zeros(11, max(N - 1, 0));
+pathReference = zeros(14, max(N - 1, 0));
 xiRef = planner(1);
 dxiRef = planner(2);
 xiRaw = planner(4);
@@ -36,13 +38,14 @@ for k = 0:N
     [baseReference, aRef] = floating_base_reference( ...
         t + k*baseNmpc.Ts, baseLqr);
     stateReference = [baseReference; xiRef; dxiRef];
-    uRef = feedforwardWrench(aRef, baseLqr.model);
+    uRef = feedforwardWrench(aRef, xiRef, baseNmpc.model);
     uRef = min(max(uRef, baseNmpc.uMin(:)), baseNmpc.uMax(:));
+    stageReference = [stateReference; uRef; previousWrench];
 
     if k == 0
-        initialReference = [stateReference; uRef];
+        initialReference = stageReference;
     elseif k < N
-        pathReference(:, k) = [stateReference; uRef];
+        pathReference(:, k) = stageReference;
     else
         terminalReference = stateReference;
     end
@@ -56,10 +59,10 @@ end
 reference = [initialReference; pathReference(:); terminalReference];
 end
 
-function u = feedforwardWrench(aRef, model)
+function u = feedforwardWrench(aRef, xiRef, model)
 FHx = model.m * aRef(1);
 FHz = model.m * (model.g + aRef(2));
 MBy = model.Iyy * aRef(3) ...
-    - model.rHEq(1) * FHz + model.rHEq(2) * FHx;
+    - (xiRef - model.xiEq) * FHz + model.rWzEq * FHx;
 u = [FHx; FHz; MBy];
 end
