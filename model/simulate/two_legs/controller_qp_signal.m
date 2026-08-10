@@ -3,5 +3,5 @@ function y = controller_qp_signal(x)
 
 [tau, debug] = controller_qp_core(x);
 y = [tau; debug.wrenchSlack; debug.wrenchFeasible; ...
-    debug.wrenchSlackNorm; double(debug.qpFeasible)];
+    debug.wrenchSlackNorm; double(debug.qpFeasible); debug.Fc];
 end
