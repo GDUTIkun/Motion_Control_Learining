@@ -15,7 +15,7 @@ wasDirty = get_param(model, "Dirty");
 cleanup = onCleanup(@() restoreModel(model, initFcn, wasDirty));
 set_param(model, "InitFcn", "");
 evalin("base", "startup");
-configure_base_tracking_case("velocity", "lqr");
+configure_base_tracking_case("velocity", "lqr", model);
 baseNmpc = evalin("base", "baseNmpc");
 baseLqr = evalin("base", "baseLqr");
 ctrl = evalin("base", "ctrl");

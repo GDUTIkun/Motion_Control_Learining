@@ -46,7 +46,7 @@ set_param("source", "InitFcn", "");
 evalin("base", "run('" + replace(fullfile(modelDir, "startup.m"), ...
     "'", "''") + "')");
 configure_symmetric_two_leg_simulink(false);
-configure_base_tracking_case("stand", "lqr");
+configure_base_tracking_case("stand", "lqr", "source");
 set_initial_base_state(initialBaseState);
 if pulseFx ~= 0
     wrenchPulse = struct("fxBody", pulseFx, "startTime", 1.0, ...
@@ -55,7 +55,7 @@ if pulseFx ~= 0
     upperController = find_system("source/PD_only", "SearchDepth", 1, ...
         "BlockType", "MATLABFcn", ...
         "MATLABFcn", "floating_base_lqr_command");
-    assert(numel(upperController) == 1);
+    assert(isscalar(upperController));
     set_param(upperController{1}, ...
         "MATLABFcn", "floating_base_lqr_pulse_command");
 end

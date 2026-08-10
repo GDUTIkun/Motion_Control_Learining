@@ -35,10 +35,11 @@ leg.I2 = leg.m2 * (leg.L2^2 + leg.width^2) / 12;
 leg.r = 0.08;
 leg.mw = 0.35;
 leg.Iw = 0.5 * leg.mw * leg.r^2;
+baseBodyMass = 3.0;
 
 traj = struct();
-% Lower the default equilibrium while keeping the wheel directly below the
-% hip. Recompute the positive-knee pose instead of adding a z transient.
+% First choose the nominal wheel height from the old hip-centered geometry;
+% the horizontal offset is then corrected by the full-robot balance solve.
 traj.nominalOffset = deg2rad([-19; 38]);
 traj.defaultHeightReduction = 0.08;
 nominalKin = wheel_leg_kinematics([traj.nominalOffset; 0], ...
@@ -55,6 +56,27 @@ ddq_joint0 = zeros(2, 1);
 kin0 = wheel_leg_kinematics([q_joint0; traj.qw0], [dq_joint0; 0], ...
     [ddq_joint0; 0], leg);
 
+% A bent leg with unequal link masses does not have its CoM on the hip-wheel
+% line. Solve the symmetric static balance condition xCoM = xWheel so the
+% nominal wheel position is a true equilibrium of the underactuated plant.
+wheelHeight0 = kin0.pO(2);
+robotMass = baseBodyMass + 2 * (leg.m1 + leg.m2 + leg.mw);
+wheelOffset0 = kin0.pO(1);
+for iteration = 1:30
+    q_joint0 = wheel_leg_inverse_kinematics( ...
+        [wheelOffset0; wheelHeight0], zeros(2, 1), zeros(2, 1), leg);
+    thighComX = leg.c1 * sin(q_joint0(1));
+    shankComX = leg.L1 * sin(q_joint0(1)) ...
+        + leg.c2 * sin(sum(q_joint0));
+    wheelOffset0 = 2 * (leg.m1 * thighComX ...
+        + leg.m2 * shankComX + leg.mw * wheelOffset0) / robotMass;
+end
+q_joint0 = wheel_leg_inverse_kinematics( ...
+    [wheelOffset0; wheelHeight0], zeros(2, 1), zeros(2, 1), leg);
+kin0 = wheel_leg_kinematics([q_joint0; traj.qw0], [dq_joint0; 0], ...
+    [ddq_joint0; 0], leg);
+traj.offset = q_joint0;
+
 traj.qJoint0 = q_joint0;
 traj.dqJoint0 = dq_joint0;
 traj.ddqJoint0 = ddq_joint0;
@@ -68,7 +90,7 @@ traj.wheelPositionPlanner = "lqr";
 traj.wheelPositionForceSource = "reference_acceleration";
 traj.wheelPositionForceScale = 0.20;
 traj.wheelPositionKneeMin = deg2rad(25);
-traj.wheelPositionFrequencyHz = 0.4;
+traj.wheelPositionFrequencyHz = 2.0;
 traj.wheelPositionDamping = 1.0;
 traj.wheelPositionVelocityMax = 0.15;
 traj.wheelPositionAccelerationMax = 0.5;
@@ -82,6 +104,11 @@ ctrl.wn = 2 * pi * ctrl.bandwidthHz;
 ctrl.zeta = [0.7852988453; 0.7852988453; 0.7852988453];
 ctrl.Kp = diag(ctrl.wn.^2);
 ctrl.Kd = diag(2 .* ctrl.zeta .* ctrl.wn);
+ctrl.commonModeBandwidthHz = [0.8; ctrl.bandwidthHz(2:3)];
+ctrl.commonModeZeta = [1.0; ctrl.zeta(2:3)];
+ctrl.commonModeWn = 2 * pi * ctrl.commonModeBandwidthHz;
+ctrl.commonModeKp = diag(ctrl.commonModeWn.^2);
+ctrl.commonModeKd = diag(2 .* ctrl.commonModeZeta .* ctrl.commonModeWn);
 ctrl.tauMax = [160; 160; 45];
 ctrl.tauSign = [1; 1; 1];
 ctrl.constraintDamping = 1e-9;
@@ -94,12 +121,26 @@ ctrl.qpWbaseQdd = 1e-3 * [1; 1; 1];
 % constraint. Keep its acceleration reference soft to avoid duplicating that
 % constraint with a high-bandwidth absolute wheel-angle task.
 ctrl.qpWqdd = [1; 1; 0.01];
+% With no differential posture reserve, keep the common hip/knee near their
+% reference instead of allowing wrench tracking to wind the leg repeatedly.
+ctrl.commonModeQpWqdd = [100; 100; 0.01];
 % In the coupled QP the body wrench is tracked through the floating-base
 % dynamics, so all actuator torques remain regularization terms.
 ctrl.qpWtau = 1e-5 * [1; 1; 1];
 ctrl.qpWFc = [0.0002433157215; 0.0002433157215];
 ctrl.qpSlackScale = [140; 140; 160];
 ctrl.qpWslack = 1e9 * [1; 1; 1];
+% Strict common mode has no differential posture to absorb a reversed body
+% moment, so limit the allowed pitch-wrench tracking error explicitly.
+ctrl.commonModeMomentSlackMax = 1.0;
+ctrl.commonModeContactStiffness = 4e4;
+ctrl.commonModeContactDamping = 300;
+ctrl.commonModeContactPreload = robotMass * leg.g ...
+    / ctrl.commonModeContactStiffness;
+% Per-physical-leg viscous damping. The strict common model represents two
+% identical joints with one Simscape joint, so its configured coefficient is
+% twice this vector. The common QP adds the same damping to h(q,dq).
+ctrl.commonModeJointDamping = [1.00; 0.70; 0.04];
 ctrl.qpWarmStart = true;
 ctrl.qpSolver = "quadprog";
 ctrl.kneeGuardEnabled = true;
@@ -123,7 +164,7 @@ leg.kinematics = @(q, dq, ddq) wheel_leg_kinematics(q, dq, ddq, leg);
 base = struct();
 base.g = leg.g;
 base.body = struct();
-base.body.mass = 3.0;
+base.body.mass = baseBodyMass;
 base.body.lengthX = 0.45;
 base.body.widthY = 0.45;
 base.body.heightZ = 0.32;
@@ -163,14 +204,23 @@ base.trajectory.enabled = true;
 base.trajectory.mode = "stand";
 base.trajectory.settleTime = 1.0;
 base.trajectory.cruiseVelocity = 0.5;
-base.trajectory.accelDuration = 0.5;
+% Strict common mode needs the bounded 0.5 m/s^2 velocity transition used
+% by the validated Simulink case. Keep startup-direct and scripted runs
+% identical when trajectory.mode is changed to "velocity" above.
+base.trajectory.accelDuration = 1.0;
 base.trajectory.cruiseDuration = 1.5;
-base.trajectory.decelDuration = 0.5;
+base.trajectory.decelDuration = 1.0;
 base.trajectory.turnHoldDuration = 0.5;
 base.trajectory.crouchDepth = 0;
 base.trajectory.crouchDownDuration = base.trajectory.settleTime;
 base.trajectory.crouchRecoverStart = 6.5;
 base.trajectory.crouchRecoverDuration = 1.0;
+if string(base.trajectory.mode) == "velocity"
+    assert(base.trajectory.accelDuration >= 1.0 ...
+        && base.trajectory.decelDuration >= 1.0, ...
+        "The validated velocity setup requires at least 1 s acceleration " + ...
+        "and deceleration ramps.");
+end
 
 baseLqr = floating_base_lqr_design(base);
 base.command = @(x) floating_base_lqr_command(x, baseLqr);

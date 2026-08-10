@@ -1,4 +1,4 @@
-function [tau, debug] = coupled_two_leg_qp_core(x)
+function [tau, debug] = coupled_two_leg_qp_core(x, mode)
 %COUPLED_TWO_LEG_QP_CORE Floating-base QP shared by both wheel legs.
 %
 % x = [t; xB; zB; thetaB; dxB; dzB; dthetaB;
@@ -6,7 +6,16 @@ function [tau, debug] = coupled_two_leg_qp_core(x)
 % upperCommand keeps the existing Simulink convention
 % [FHx_ext_total; FHz_ext_total; MBy_des].
 
-persistent qpOptions zWarm
+persistent qpOptions zWarm zWarmCommon
+
+if nargin < 2 || isempty(mode)
+    mode = "full";
+end
+mode = string(mode);
+if mode ~= "full" && mode ~= "common"
+    error("coupled_two_leg_qp_core:InvalidMode", ...
+        "Mode must be 'full' or 'common'.");
+end
 
 x = double(x(:));
 if numel(x) ~= 26
@@ -19,6 +28,15 @@ base = evalin("base", "base");
 ctrl = evalin("base", "ctrl");
 traj = evalin("base", "traj");
 
+if mode == "common"
+    if isfield(ctrl, "commonModeKp")
+        ctrl.Kp = ctrl.commonModeKp;
+    end
+    if isfield(ctrl, "commonModeKd")
+        ctrl.Kd = ctrl.commonModeKd;
+    end
+end
+
 t = x(1);
 baseState = x(2:7);
 qLeft = x(8:10);
@@ -29,9 +47,23 @@ upperCommand = x(20:22);
 wheelReference = x(23:26);
 wrenchCommand = [-upperCommand(1:2); upperCommand(3)];
 
+if mode == "common"
+    qCommon = 0.5 * (qLeft + qRight);
+    dqCommon = 0.5 * (dqLeft + dqRight);
+    qLeft = qCommon;
+    qRight = qCommon;
+    dqLeft = dqCommon;
+    dqRight = dqCommon;
+end
+
 qFull = [baseState(1:3); qLeft; qRight];
 dqFull = [baseState(4:6); dqLeft; dqRight];
 [M, h, Jc, dJcDq] = floatingBaseDynamics(qFull, dqFull, base, leg);
+if mode == "common" && isfield(ctrl, "commonModeJointDamping")
+    jointDamping = ctrl.commonModeJointDamping(:);
+    h(4:6) = h(4:6) + jointDamping .* dqLeft;
+    h(7:9) = h(7:9) + jointDamping .* dqRight;
+end
 
 [baseQddCmd, aHCmd] = desiredBaseAcceleration(baseState, ...
     wrenchCommand, base);
@@ -54,6 +86,9 @@ qddRightCmd(2) = max(qddRightCmd(2), kneeMinRight);
 % the QP actively reject the otherwise-uncontrolled left/right difference.
 wBaseQdd = getCtrlVec(ctrl, "qpWbaseQdd", 1e-3 * ones(3, 1));
 wLegQdd = getCtrlVec(ctrl, "qpWqdd", ones(3, 1));
+if mode == "common"
+    wLegQdd = getCtrlVec(ctrl, "commonModeQpWqdd", wLegQdd);
+end
 wTau = getCtrlVec(ctrl, "qpWtau", 1e-5 * ones(3, 1));
 wFc = getCtrlVec(ctrl, "qpWFc", 1e-5 * ones(2, 1));
 slackScale = getCtrlVec(ctrl, "qpSlackScale", [140; 140; 160]);
@@ -75,6 +110,16 @@ contactRhs = -dJcDq - Kc * (Jc * dqFull);
 Dw = zeros(3, 9);
 Dw(:, 1:3) = DwReduced(:, 1:3);
 wrenchRhs = wrenchCommand - wrenchOffset;
+
+if mode == "common"
+    [tau, debug, zWarmCommon, qpOptions] = solveCommonModeQp( ...
+        t, baseQddCmd, qddLeftCmd, qddRightCmd, ...
+        kneeMinLeft, kneeMinRight, M, h, Jc, contactRhs, ...
+        S, DwReduced, wrenchOffset, wrenchRhs, ...
+        wBaseQdd, wLegQdd, wTau, wFc, wSlack, slackScale, ...
+        base, leg, ctrl, zWarmCommon, qpOptions);
+    return;
+end
 
 Aeq = [
     M, -S, -Jc', zeros(9, 3);
@@ -165,6 +210,130 @@ debug.dynamicsResidual = M*qddSolution + h ...
     - S*tau - Jc'*contactForce;
 debug.symmetryQddError = qddSolution(4:6) - qddSolution(7:9);
 debug.massMatrix = M;
+debug.commonMode = false;
+end
+
+function [tau, debug, zWarm, qpOptions] = solveCommonModeQp( ...
+        t, baseQddCmd, qddLeftCmd, qddRightCmd, ...
+        kneeMinLeft, kneeMinRight, M, h, Jc, contactRhs, ...
+        S, Dw, wrenchOffset, wrenchRhs, ...
+        wBaseQdd, wLegQdd, wTau, wFc, wSlack, slackScale, ...
+        base, leg, ctrl, zWarm, qpOptions)
+% Restrict the full two-leg dynamics to qL=qR without approximating the
+% doubled mass, actuator, or contact contributions.
+Tq = [eye(3), zeros(3); zeros(3), eye(3); zeros(3), eye(3)];
+Ttau = [eye(3); eye(3)];
+Tlambda = [eye(2); eye(2)];
+
+Mr = Tq' * M * Tq;
+hr = Tq' * h;
+Sr = Tq' * S * Ttau;
+Jforce = Tq' * Jc' * Tlambda;
+Jrolling = Jc(1:2, :) * Tq;
+
+qddLegCmd = 0.5 * (qddLeftCmd + qddRightCmd);
+qddTarget = [baseQddCmd; qddLegCmd];
+weights = [wBaseQdd; 2*wLegQdd; 2*wTau; 2*wFc; ...
+    wSlack ./ (slackScale.^2)];
+H = diag(weights) + 1e-9 * eye(14);
+f = [-weights(1:6) .* qddTarget; zeros(8, 1)];
+
+Aeq = [
+    Mr, -Sr, -Jforce, zeros(6, 3);
+    Jrolling, zeros(2, 8);
+    Dw, zeros(3, 5), -eye(3)
+];
+beq = [-hr; contactRhs(1:2); wrenchRhs];
+
+mu = getCtrlField(ctrl, "mu", 0.8);
+Aineq = zeros(3, 14);
+Aineq(1, 10:11) = [1, -mu];
+Aineq(2, 10:11) = [-1, -mu];
+Aineq(3, 11) = -1;
+bineq = zeros(3, 1);
+kneeMin = max(kneeMinLeft, kneeMinRight);
+if isfinite(kneeMin)
+    row = zeros(1, 14);
+    row(5) = -1;
+    Aineq = [Aineq; row];
+    bineq = [bineq; -kneeMin];
+end
+
+tauMax = ctrl.tauMax(:);
+lb = [-inf(6, 1); -tauMax; -inf; 0; -inf(3, 1)];
+ub = [ inf(6, 1);  tauMax;  inf; inf;  inf(3, 1)];
+% In strict common mode there is no differential posture that can recover a
+% freely relaxed body moment. Keep Fx/Fz soft and bound the moment error.
+momentSlackMax = getCtrlField(ctrl, "commonModeMomentSlackMax", 0.5);
+lb(14) = -momentSlackMax;
+ub(14) = momentSlackMax;
+robotMass = base.m + 2 * (leg.m1 + leg.m2 + leg.mw);
+z0 = [qddTarget; zeros(3, 1); 0; robotMass*base.g/2; zeros(3, 1)];
+if t <= 0 || isempty(zWarm) || numel(zWarm) ~= 14 ...
+        || any(~isfinite(zWarm))
+    zWarm = z0;
+elseif getCtrlField(ctrl, "qpWarmStart", true)
+    z0 = zWarm;
+end
+
+exitflag = -999;
+if string(getCtrlField(ctrl, "qpSolver", "quadprog")) == "equality"
+    [z, exitflag] = solveEqualityQp(H, f, Aeq, beq);
+else
+    try
+        if isempty(qpOptions)
+            qpOptions = optimoptions("quadprog", "Display", "off", ...
+                "Algorithm", "interior-point-convex");
+        end
+        [z, ~, exitflag] = quadprog(H, f, Aineq, bineq, Aeq, beq, ...
+            lb, ub, z0, qpOptions);
+    catch
+        z = [];
+    end
+end
+
+if isempty(z) || exitflag <= 0 || any(~isfinite(z))
+    [z, fallbackFlag] = solveEqualityQp(H, f, Aeq, beq);
+    if isempty(z)
+        z = z0;
+    end
+    z(7:9) = min(max(z(7:9), -tauMax), tauMax);
+    z(11) = max(z(11), 0);
+    exitflag = min(-1, fallbackFlag);
+else
+    zWarm = z;
+end
+
+qddReduced = z(1:6);
+qddSolution = Tq * qddReduced;
+tauPerLeg = z(7:9);
+tau = Ttau * tauPerLeg;
+contactPerLeg = z(10:11);
+contactForce = Tlambda * contactPerLeg;
+wrenchSlack = z(12:14);
+wrenchFeasible = Dw * qddReduced + wrenchOffset;
+
+eqResidual = Aeq * z - beq;
+ineqResidual = Aineq * z - bineq;
+debug = struct();
+debug.qdd = qddSolution;
+debug.contactForce = contactForce;
+debug.FcLeft = contactPerLeg;
+debug.FcRight = contactPerLeg;
+debug.exitflag = exitflag;
+debug.qpFeasible = exitflag > 0 && norm(eqResidual, inf) < 1e-6 ...
+    && (isempty(ineqResidual) || max(ineqResidual) < 1e-6);
+debug.wrenchCommand = wrenchRhs + wrenchOffset;
+debug.wrenchSlack = wrenchSlack;
+debug.wrenchFeasible = wrenchFeasible;
+debug.wrenchSlackNorm = norm(wrenchSlack ./ slackScale);
+debug.dynamicsResidual = M*qddSolution + h ...
+    - S*tau - Jc'*contactForce;
+debug.symmetryQddError = zeros(3, 1);
+debug.massMatrix = Mr;
+debug.commonMode = true;
+debug.tauTotal = 2 * tauPerLeg;
+debug.contactForceTotal = 2 * contactPerLeg;
 end
 
 function qddCmd = relativeLegAccelerationCommand(q, dq, qd, dqd, ...

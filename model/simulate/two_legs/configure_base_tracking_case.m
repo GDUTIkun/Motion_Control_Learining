@@ -1,4 +1,4 @@
-function configure_base_tracking_case(caseMode, plannerMode)
+function configure_base_tracking_case(caseMode, plannerMode, modelName)
 %CONFIGURE_BASE_TRACKING_CASE Configure stand, z, or velocity tracking.
 
 if nargin < 1 || isempty(caseMode)
@@ -7,8 +7,14 @@ end
 if nargin < 2 || isempty(plannerMode)
     plannerMode = "lqr";
 end
+if nargin < 3 || isempty(modelName)
+    modelName = "source_common";
+end
 caseMode = lower(string(caseMode));
 plannerMode = lower(string(plannerMode));
+model = string(modelName);
+assert(any(model == ["source", "source_common"]), ...
+    "modelName must be 'source' or 'source_common'.");
 if ~ismember(caseMode, ["stand", "z", "velocity"])
     error("configure_base_tracking_case:InvalidMode", ...
         "caseMode must be 'stand', 'z', or 'velocity'.");
@@ -18,7 +24,6 @@ if ~ismember(plannerMode, ["lqr", "qp_force"])
         "plannerMode must be 'lqr' or 'qp_force'.");
 end
 
-model = "source";
 load_system(model);
 
 base = evalin("base", "base");
@@ -29,6 +34,12 @@ trajectory = base.trajectory;
 trajectory.enabled = true;
 trajectory.mode = caseMode;
 trajectory.crouchDepth = 0;
+if model == "source_common" && caseMode == "velocity"
+    % The strict common-mode plant has no differential posture reserve.
+    % Keep the 0.5 m/s command, but halve its acceleration to 0.5 m/s^2.
+    trajectory.accelDuration = 1.0;
+    trajectory.decelDuration = 1.0;
+end
 stopTime = 10;
 if caseMode == "stand"
     stopTime = 5;
@@ -51,6 +62,6 @@ for idx = 1:numel(pulseBlocks)
 end
 
 set_param(model, "StopTime", string(stopTime));
-fprintf("Configured %g s %s case with %s wheel planning; NMPC enabled = %d.\n", ...
-    stopTime, caseMode, plannerMode, baseNmpc.enabled);
+fprintf("Configured %s: %g s %s case with %s wheel planning; NMPC enabled = %d.\n", ...
+    model, stopTime, caseMode, plannerMode, baseNmpc.enabled);
 end

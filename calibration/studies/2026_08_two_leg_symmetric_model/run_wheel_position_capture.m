@@ -28,7 +28,7 @@ set_param("source", "InitFcn", "");
 evalin("base", "run('" + replace(fullfile(modelDir, "startup.m"), ...
     "'", "''") + "')");
 configure_symmetric_two_leg_simulink(false);
-configure_base_tracking_case("velocity", "lqr");
+configure_base_tracking_case("velocity", "lqr", "source");
 set_initial_base_state(zeros(6, 1));
 clear floating_base_lqr_wrench controller_qp_core wheel_position_lqr_reference
 

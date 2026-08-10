@@ -1,24 +1,33 @@
-function results = run_standing_cases(stopTime)
+function results = run_standing_cases(stopTime, modelName)
 %RUN_STANDING_CASES Run nominal stand and a small pitch disturbance.
 
 if nargin < 1 || isempty(stopTime)
     stopTime = 10;
 end
+if nargin < 2 || isempty(modelName)
+    modelName = "source";
+end
+modelName = string(modelName);
+assert(any(modelName == ["source", "source_common"]), ...
+    "modelName must be 'source' or 'source_common'.");
 
 studyDir = fileparts(mfilename("fullpath"));
 codeRoot = fileparts(fileparts(fileparts(studyDir)));
 modelDir = fullfile(codeRoot, "model", "simulate", "two_legs");
 addpath(modelDir);
 oldFolder = cd(modelDir);
-load_system("source");
-initFcn = get_param("source", "InitFcn");
-cleanup = onCleanup(@() finishRun(oldFolder, initFcn));
-set_param("source", "InitFcn", "");
-
 evalin("base", "run('" + replace(fullfile(modelDir, "startup.m"), ...
     "'", "''") + "')");
-configure_symmetric_two_leg_simulink(false);
-configure_base_tracking_case("stand", "lqr");
+if modelName == "source_common"
+    configure_common_mode_simulink(true);
+else
+    load_system(modelName);
+    configure_symmetric_two_leg_simulink(false);
+end
+initFcn = get_param(modelName, "InitFcn");
+cleanup = onCleanup(@() finishRun(oldFolder, modelName, initFcn));
+set_param(modelName, "InitFcn", "");
+configure_base_tracking_case("stand", "lqr", modelName);
 
 cases = struct( ...
     "name", {"stand", "pitch_2deg"}, ...
@@ -26,19 +35,21 @@ cases = struct( ...
 for i = 1:numel(cases)
     set_initial_base_state(cases(i).x0);
     clear floating_base_lqr_wrench floating_base_lqr_command ...
-        coupled_two_leg_qp_core wheel_position_lqr_reference
-    output = sim("source", "StopTime", string(stopTime), ...
+        coupled_two_leg_qp_core common_mode_qp_signal ...
+        wheel_position_lqr_reference
+    output = sim(modelName, "StopTime", string(stopTime), ...
         "ReturnWorkspaceOutputs", "on");
     results.(cases(i).name) = metrics(output.logsout);
 end
 
 runVelocity = stopTime >= 6.5;
 if runVelocity
-    configure_base_tracking_case("velocity", "lqr");
+    configure_base_tracking_case("velocity", "lqr", modelName);
     set_initial_base_state(zeros(6, 1));
     clear floating_base_lqr_wrench floating_base_lqr_command ...
-        coupled_two_leg_qp_core wheel_position_lqr_reference
-    output = sim("source", "StopTime", string(stopTime), ...
+        coupled_two_leg_qp_core common_mode_qp_signal ...
+        wheel_position_lqr_reference
+    output = sim(modelName, "StopTime", string(stopTime), ...
         "ReturnWorkspaceOutputs", "on");
     results.velocity = metrics(output.logsout);
 end
@@ -55,15 +66,28 @@ results.pass = commonChecks(stand, ctrl) && commonChecks(pitch, ctrl) ...
     && abs(pitch.finalBaseState(3)) < deg2rad(1) ...
     && abs(pitch.finalBaseState(3)) < 0.5*deg2rad(2) ...
     && max(abs(pitch.finalBaseState(4:6))) < 0.15;
+if modelName == "source_common"
+    results.pass = results.pass && postureChecks(stand) ...
+        && postureChecks(pitch);
+end
 if runVelocity
     velocity = results.velocity;
+    base = evalin("base", "base");
+    trajectory = base.trajectory;
+    plannedForwardDistance = abs(trajectory.cruiseVelocity) * (...
+        trajectory.cruiseDuration ...
+        + 0.5 * (trajectory.accelDuration + trajectory.decelDuration));
+    results.velocityReferencePeak = plannedForwardDistance;
     results.pass = results.pass && controllerChecks(velocity, ctrl) ...
-        && velocity.maxAbsBasePosition(1) < 1.1 ...
+        && abs(velocity.maxAbsBasePosition(1) - plannedForwardDistance) < 0.1 ...
         && velocity.maxAbsBasePosition(2) < 0.1 ...
         && velocity.maxAbsPitch < deg2rad(5) ...
         && abs(velocity.finalBaseState(1)) < 0.01 ...
         && abs(velocity.finalBaseState(3)) < deg2rad(1) ...
         && max(abs(velocity.finalBaseState(4:6))) < 0.1;
+    if modelName == "source_common"
+        results.pass = results.pass && postureChecks(velocity);
+    end
 end
 
 fprintf("Stand metrics:\n");
@@ -92,12 +116,41 @@ value = data.allFinite ...
     && data.qpFeasibleRatio >= 0.99;
 end
 
+function value = postureChecks(data)
+value = data.maxSettledLegReferenceError < deg2rad(0.5) ...
+    && data.maxSettledLegVelocityError < 0.1 ...
+    && data.finalLegReferenceError < deg2rad(0.5) ...
+    && data.finalHipKneeSpeed < 0.02;
+end
+
 function data = metrics(logs)
-common = samples(logs, "commonWheelStateSignal");
-legState = samples(logs, "symmetryLegState");
+[common, commonTime] = samples(logs, "commonWheelStateSignal");
+[legState, legTime] = samples(logs, "symmetryLegState");
 coupledQp = samples(logs, "coupledQpSignal");
+[wheelReference, wheelReferenceTime] = samples(logs, ...
+    "commonWheelReference");
 
 baseState = common(:, 2:7);
+baseAtLegTime = interp1(commonTime, baseState, legTime, ...
+    "previous", "extrap");
+wheelReferenceAtLegTime = interp1(wheelReferenceTime, wheelReference, ...
+    legTime, "previous", "extrap");
+base = evalin("base", "base");
+leg = evalin("base", "leg");
+traj = evalin("base", "traj");
+legReference = zeros(numel(legTime), 2);
+legReferenceSpeed = zeros(numel(legTime), 2);
+for idx = 1:numel(legTime)
+    [qd, dqd, ~] = floating_base_leg_reference(legTime(idx), ...
+        baseAtLegTime(idx, :).', traj, leg, base, zeros(2, 1), ...
+        zeros(2, 1), false, wheelReferenceAtLegTime(idx, :).');
+    legReference(idx, :) = [qd(1) - baseAtLegTime(idx, 3), qd(2)];
+    legReferenceSpeed(idx, :) = ...
+        [dqd(1) - baseAtLegTime(idx, 6), dqd(2)];
+end
+legReferenceError = legState(:, 1:2) - legReference;
+legVelocityError = legState(:, 4:5) - legReferenceSpeed;
+settled = legTime >= max(0, legTime(end) - 1);
 stateDifference = legState(:, 1:6) - legState(:, 7:12);
 % Absolute wheel angle is cyclic and may retain an integer-turn offset after
 % the compliant contacts settle. Check hip/knee posture and all velocities.
@@ -108,6 +161,17 @@ data = struct( ...
     "maxAbsBasePosition", max(abs(baseState(:, 1:2)), [], 1), ...
     "maxAbsPitch", max(abs(baseState(:, 3))), ...
     "maxAbsTorque", max(abs([coupledQp(:, 1:3); coupledQp(:, 4:6)]), [], 1), ...
+    "maxLegReferenceError", max(abs(legReferenceError), [], "all"), ...
+    "maxSettledLegReferenceError", ...
+        max(abs(legReferenceError(settled, :)), [], "all"), ...
+    "finalLegReferenceError", max(abs(legReferenceError(end, :))), ...
+    "maxSettledHipKneeSpeed", ...
+        max(abs(legState(settled, 4:5)), [], "all"), ...
+    "maxSettledLegReferenceSpeed", ...
+        max(abs(legReferenceSpeed(settled, :)), [], "all"), ...
+    "maxSettledLegVelocityError", ...
+        max(abs(legVelocityError(settled, :)), [], "all"), ...
+    "finalHipKneeSpeed", max(abs(legState(end, 4:5))), ...
     "maxLegStateDifference", max(abs(stateDifference), [], "all"), ...
     "finalLegStateDifference", max(abs(controlledDifference(end, :))), ...
     "maxTorqueDifference", max(abs(torqueDifference), [], "all"), ...
@@ -118,21 +182,21 @@ data = struct( ...
         && all(isfinite(coupledQp), "all"));
 end
 
-function data = samples(logs, name)
+function [data, time] = samples(logs, name)
 values = logs.get(name).Values;
+time = values.Time(:);
 data = squeeze(values.Data);
 if isvector(data)
     data = data(:);
-elseif size(data, 1) ~= numel(values.Time) && ...
-        size(data, 2) == numel(values.Time)
+elseif size(data, 1) ~= numel(time) && size(data, 2) == numel(time)
     data = data.';
 end
 end
 
-function finishRun(oldFolder, initFcn)
-if bdIsLoaded("source")
-    set_param("source", "InitFcn", initFcn);
-    close_system("source", 0);
+function finishRun(oldFolder, modelName, initFcn)
+if bdIsLoaded(modelName)
+    set_param(modelName, "InitFcn", initFcn);
+    close_system(modelName, 0);
 end
 cd(oldFolder);
 end

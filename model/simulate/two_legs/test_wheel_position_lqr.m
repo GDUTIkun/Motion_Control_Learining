@@ -3,18 +3,20 @@ function test_wheel_position_lqr()
 
 run(fullfile(fileparts(mfilename("fullpath")), "startup.m"));
 
-stateInput = [0; base.xEq; leg.q0; leg.dq0];
+stateInput = [0; base.xEq; leg.q0; leg.dq0; leg.q0; leg.dq0];
 measured = wheel_position_state_signal(stateInput, base, leg, ctrl);
 assert(numel(measured) == 10 && all(isfinite(measured)));
 assert(abs(measured(8) - wheelLqr.neutral) < 1e-10);
 assert(abs(measured(9)) < 1e-10);
 assert(abs(measured(10) - wheelLqr.heightNominal) < 1e-10);
 
-expectedBxi = [-1/base.m - leg.r/(leg.mw*leg.r + leg.Iw/leg.r), ...
-    0, -1/(leg.mw*leg.r + leg.Iw/leg.r)];
+rollingDenominator = leg.mw*leg.r + leg.Iw/leg.r;
+expectedBxi = [-1/base.m - leg.r/(2*rollingDenominator), ...
+    0, -1/(2*rollingDenominator)];
 assert(norm(baseNmpc.model.B(8, :) - expectedBxi, inf) < 1e-12);
 
 clear wheel_position_lqr_reference
+baseLqr.trajectory.mode = "velocity";
 tProbe = base.trajectory.settleTime + 0.25 * base.trajectory.accelDuration;
 [xRef, ~] = floating_base_reference(tProbe, baseLqr);
 probe = [tProbe; xRef; wheelLqr.neutral; 0; wheelLqr.heightNominal];
