@@ -1,4 +1,4 @@
-function info = build_base_nmpc_solver(forceRebuild, updateSimulinkModel)
+function info = build_base_nmpc_solver(forceRebuild, updateSimulinkModel, baseNmpcOverride)
 %BUILD_BASE_NMPC_SOLVER Build the solver and update its Simulink block.
 %
 % Recommended non-interactive use:
@@ -9,6 +9,14 @@ if nargin < 1 || isempty(forceRebuild)
 end
 if nargin < 2 || isempty(updateSimulinkModel)
     updateSimulinkModel = true;
+end
+if nargin < 3
+    baseNmpcOverride = [];
+end
+if ~isempty(baseNmpcOverride) ...
+        && ~(isstruct(baseNmpcOverride) && isscalar(baseNmpcOverride))
+    error("build_base_nmpc_solver:InvalidOverride", ...
+        "baseNmpcOverride must be an empty value or a scalar struct.");
 end
 
 simulateDir = fileparts(mfilename("fullpath"));
@@ -24,6 +32,10 @@ evalin("base", "run(" + quoted(startupFile) + ");");
 base = evalin("base", "base");
 leg = evalin("base", "leg");
 baseNmpc = evalin("base", "baseNmpc");
+if ~isempty(baseNmpcOverride)
+    baseNmpc = baseNmpcOverride;
+    assignin("base", "baseNmpc", baseNmpc);
+end
 generatedRoot = fullfile(simulateDir, "generated");
 generatedDir = char(baseNmpc.generatedDir);
 

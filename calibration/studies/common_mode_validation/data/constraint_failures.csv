@@ -1,0 +1,7 @@
+case_name,parameter,command_v_mps,command_a_mps2,failure_reason
+constraint_baseline_v0p75_a0p75,baseline,0.75,0.75,Simulation did not complete: variable-step collapse after demand increase.
+constraint_low_mu_v0p75_a0p75,QP mu=0.20,0.75,0.75,Simulation did not complete: variable-step collapse after demand increase.
+constraint_low_tau_v0p75_a0p75,tauMax=0.25x,0.75,0.75,Simulation did not complete: variable-step collapse after demand increase.
+constraint_baseline_v1_a1,baseline,1,1,Not run: the lower 0.75 demand point already failed.
+constraint_low_mu_v1_a1,QP mu=0.20,1,1,Not run: the lower 0.75 demand point already failed.
+constraint_low_tau_v1_a1,tauMax=0.25x,1,1,Not run: the lower 0.75 demand point already failed.

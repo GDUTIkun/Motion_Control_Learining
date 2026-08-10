@@ -1,4 +1,3 @@
-
 ## Knowledge and code tool routing
 
 ### Graphify — research knowledge layer (merged graph)
@@ -38,3 +37,7 @@ Rules:
 1. Query Graphify (merged graph) for the concept + documented location.
 2. Query codebase-memory-mcp to verify current files, symbols, call paths.
 3. If they disagree, codebase-memory-mcp wins (live code beats stale docs).
+
+
+
+可以跟据全局AGENTS.md调用claude帮助干活
