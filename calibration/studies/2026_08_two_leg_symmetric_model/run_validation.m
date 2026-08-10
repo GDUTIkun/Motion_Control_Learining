@@ -57,11 +57,14 @@ stateB = wheel_position_state_signal([0; zeros(6, 1); ...
     qRight; dqRight; qLeft; dqLeft], base, leg, ctrl);
 assert(norm(stateA - stateB, inf) < 1e-12);
 
-clear controller_qp_core
-qpInput = [0; zeros(6, 1); leg.q0; leg.dq0; perLegCommand; wheelReference];
-leftTorque = controller_qp(qpInput);
-rightTorque = controller_qp(qpInput);
-assert(all(isfinite([leftTorque; rightTorque])));
+clear coupled_two_leg_qp_core
+totalCommand = [0; -base.m*base.g; 0];
+qpInput = [0; zeros(6, 1); leg.q0; leg.dq0; leg.q0; leg.dq0; ...
+    totalCommand; wheelReference];
+[torque, qpDebug] = coupled_two_leg_qp_core(qpInput);
+leftTorque = torque(1:3);
+rightTorque = torque(4:6);
+assert(qpDebug.qpFeasible && all(isfinite(torque)));
 assert(max(abs(leftTorque - rightTorque)) < 1e-8);
 assert(all(abs(leftTorque) <= ctrl.tauMax + 1e-8));
 
@@ -70,24 +73,24 @@ assertPhysicalGeometry();
 simulation = sim("source", "StopTime", "0.05", ...
     "ReturnWorkspaceOutputs", "on");
 logs = simulation.logsout;
-leftQp = sampleRows(logs.get("leftQpSignal").Values);
-rightQp = sampleRows(logs.get("rightQpSignal").Values);
-perLegWrench = sampleRows(logs.get("perLegWrenchCommand").Values);
+coupledQp = sampleRows(logs.get("coupledQpSignal").Values);
+upperCommand = sampleRows(logs.get("totalUpperCommand").Values);
 commonWheel = sampleRows(logs.get("commonWheelStateSignal").Values);
-assert(all(isfinite(leftQp), "all"));
-assert(all(isfinite(rightQp), "all"));
-assert(all(isfinite(perLegWrench), "all"));
+assert(all(isfinite(coupledQp), "all"));
+assert(all(isfinite(upperCommand), "all"));
 assert(all(isfinite(commonWheel), "all"));
-assert(max(abs(leftQp(:, 1:3) - rightQp(:, 1:3)), [], "all") < 1e-7);
-assert(abs(perLegWrench(1, 2) + base.m*base.g/2) < 1e-9);
+assert(all(abs(coupledQp(:, 1:3)) <= ctrl.tauMax(:).' + 1e-8, "all"));
+assert(all(abs(coupledQp(:, 4:6)) <= ctrl.tauMax(:).' + 1e-8, "all"));
+assert(all(coupledQp(:, 14) > 0.5));
+assert(abs(upperCommand(1, 2) + base.m*base.g) < 1e-9);
 
 results = struct( ...
     "Iyy", base.Iyy, ...
     "commonControllabilityRank", commonControllabilityRank, ...
     "maxLeftRightTorqueDifference", ...
-        max(abs(leftQp(:, 1:3) - rightQp(:, 1:3)), [], "all"), ...
-    "initialPerLegWrench", perLegWrench(1, :), ...
-    "samples", size(leftQp, 1));
+        max(abs(coupledQp(:, 1:3) - coupledQp(:, 4:6)), [], "all"), ...
+    "initialTotalCommand", upperCommand(1, :), ...
+    "samples", size(coupledQp, 1));
 disp(results);
 clear cleanup
 end

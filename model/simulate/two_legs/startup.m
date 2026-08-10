@@ -85,12 +85,21 @@ ctrl.Kd = diag(2 .* ctrl.zeta .* ctrl.wn);
 ctrl.tauMax = [160; 160; 45];
 ctrl.tauSign = [1; 1; 1];
 ctrl.constraintDamping = 1e-9;
-ctrl.constraintVelocityGain = 41.79564438;
-ctrl.qpWqdd = [1; 1; 1];
-% The hip torque tracks MBy_des from the floating-base LQR. Keep the knee
-% and wheel torque entries as small regularizers.
-ctrl.qpWtau = [1.0; 5.946535182e-06; 5.946535182e-06];
+% The analytic rolling constraint is rigid, while the Simscape contact is
+% compliant. A high Baumgarte velocity gain makes the two contact models
+% fight and excites pitch during velocity reversals.
+ctrl.constraintVelocityGain = 5;
+ctrl.qpWbaseQdd = 1e-3 * [1; 1; 1];
+% Wheel spin is already tied to base/leg motion by the hard rolling
+% constraint. Keep its acceleration reference soft to avoid duplicating that
+% constraint with a high-bandwidth absolute wheel-angle task.
+ctrl.qpWqdd = [1; 1; 0.01];
+% In the coupled QP the body wrench is tracked through the floating-base
+% dynamics, so all actuator torques remain regularization terms.
+ctrl.qpWtau = 1e-5 * [1; 1; 1];
 ctrl.qpWFc = [0.0002433157215; 0.0002433157215];
+ctrl.qpSlackScale = [140; 140; 160];
+ctrl.qpWslack = 1e9 * [1; 1; 1];
 ctrl.qpWarmStart = true;
 ctrl.qpSolver = "quadprog";
 ctrl.kneeGuardEnabled = true;
@@ -100,16 +109,9 @@ ctrl.kneeGuardDamping = 1.0;
 % Match the Simscape Spatial Contact Force block conservatively
 % (static friction = 0.5, dynamic friction = 0.3 in source.slx).
 ctrl.mu = 0.45;
-% Maps desired body pitch moment MBy_des to the hip joint torque reference.
-% The torque applied to the leg is the reaction of the body-side moment.
-ctrl.hipMomentToTauSign = -1;
 % Maps base pitch into the absolute thigh angle used by the analytic leg
 % dynamics: qh_abs = qh_rel + ctrl.basePitchToAbsHipSign * thetaB.
 ctrl.basePitchToAbsHipSign = 1;
-% Use the upper-layer wrench to estimate floating-hip acceleration in the
-% lower QP rolling constraint. This must be paired with an implicit solver
-% for the compliant Simscape contact model.
-ctrl.useFloatingHipAcceleration = true;
 ctrl.discreteExecution = true;
 
 leg.M = @(q) wheel_leg_dynamics(q, zeros(3, 1), leg, "M");

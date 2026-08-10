@@ -1,10 +1,8 @@
 function configure_symmetric_two_leg_simulink(doSave)
-%CONFIGURE_SYMMETRIC_TWO_LEG_SIMULINK Wire the common-mode LQR to two leg QPs.
+%CONFIGURE_SYMMETRIC_TWO_LEG_SIMULINK Wire one floating-base QP to both legs.
 %
-% The upper controller produces the total [Fx; Fz; My] body wrench. A 0.5
-% gain sends the same symmetric share to each independent 3-DoF leg QP.
-% Left/right wheel states are averaged only for the common wheel-position
-% planner; no differential state or differential controller is introduced.
+% The upper controller produces one total body wrench. Both leg states,
+% both rolling contacts, and both actuator vectors enter one coupled QP.
 
 if nargin < 1 || isempty(doSave)
     doSave = true;
@@ -48,6 +46,16 @@ names = [
     "Right Slack Norm Terminator"
     "Right QP Status Terminator"
     "Right Contact Force Terminator"
+    "Coupled QP Input"
+    "Coupled QP Input ZOH"
+    "Coupled QP"
+    "Coupled QP Split"
+    "Coupled Slack Terminator"
+    "Coupled Feasible Terminator"
+    "Coupled Slack Norm Terminator"
+    "Coupled QP Status Terminator"
+    "Coupled Left Contact Force Terminator"
+    "Coupled Right Contact Force Terminator"
     "Symmetry Diagnostics"
     "Symmetry Diagnostics Terminator"
     "NMPC State Split"
@@ -68,15 +76,6 @@ set_param(baseStateZoh, "SampleTime", "base.Ts");
 set_param(upperController, "OutputDimensions", "3", ...
     "SampleTime", "base.Ts");
 
-perLegWrench = add_block("simulink/Math Operations/Gain", ...
-    subsystem + "/Per-Leg Wrench", ...
-    "Gain", "base.symmetricLoadShare", ...
-    "Multiplication", "Element-wise(K.*u)", ...
-    "Position", [520, 370, 610, 405]);
-perLegWrenchSplit = add_block("simulink/Signal Routing/Demux", ...
-    subsystem + "/Per-Leg Wrench Split", ...
-    "Outputs", "3", "Position", [655, 350, 660, 430]);
-
 wheelStateInput = add_block("simulink/Signal Routing/Mux", ...
     subsystem + "/Common Wheel State Input", ...
     "Inputs", "13", "Position", [720, 485, 725, 705]);
@@ -90,43 +89,26 @@ wheelPlanner = add_block(upperController, ...
     "OutputDimensions", "4", "SampleTime", "base.Ts", ...
     "Position", [1010, 565, 1195, 605]);
 
-leftInput = add_block("simulink/Signal Routing/Mux", ...
-    subsystem + "/Left QP Input", "Inputs", "11", ...
-    "Position", [1240, 310, 1245, 500]);
-rightInput = add_block("simulink/Signal Routing/Mux", ...
-    subsystem + "/Right QP Input", "Inputs", "11", ...
-    "Position", [1240, 690, 1245, 880]);
-leftZoh = add_block("simulink/Discrete/Zero-Order Hold", ...
-    subsystem + "/Left QP Input ZOH", "SampleTime", "base.Ts", ...
-    "Position", [1295, 385, 1345, 425]);
-rightZoh = add_block("simulink/Discrete/Zero-Order Hold", ...
-    subsystem + "/Right QP Input ZOH", "SampleTime", "base.Ts", ...
-    "Position", [1295, 765, 1345, 805]);
-leftQp = add_block(upperController, subsystem + "/Left QP", ...
-    "MATLABFcn", "controller_qp_signal", "OutputDimensions", "13", ...
-    "SampleTime", "base.Ts", "Position", [1395, 385, 1535, 425]);
-rightQp = add_block(upperController, subsystem + "/Right QP", ...
-    "MATLABFcn", "controller_qp_signal", "OutputDimensions", "13", ...
-    "SampleTime", "base.Ts", "Position", [1395, 765, 1535, 805]);
-
-leftSplit = add_block("simulink/Signal Routing/Demux", ...
-    subsystem + "/Left QP Split", "Outputs", "[3 3 3 1 1 2]", ...
-    "Position", [1585, 350, 1590, 465]);
-rightSplit = add_block("simulink/Signal Routing/Demux", ...
-    subsystem + "/Right QP Split", "Outputs", "[3 3 3 1 1 2]", ...
-    "Position", [1585, 730, 1590, 845]);
+coupledInput = add_block("simulink/Signal Routing/Mux", ...
+    subsystem + "/Coupled QP Input", "Inputs", "15", ...
+    "Position", [1240, 310, 1245, 880]);
+coupledZoh = add_block("simulink/Discrete/Zero-Order Hold", ...
+    subsystem + "/Coupled QP Input ZOH", "SampleTime", "base.Ts", ...
+    "Position", [1295, 575, 1345, 615]);
+coupledQp = add_block(upperController, subsystem + "/Coupled QP", ...
+    "MATLABFcn", "coupled_two_leg_qp_signal", "OutputDimensions", "18", ...
+    "SampleTime", "base.Ts", "Position", [1395, 575, 1545, 615]);
+coupledSplit = add_block("simulink/Signal Routing/Demux", ...
+    subsystem + "/Coupled QP Split", "Outputs", "[3 3 3 3 1 1 2 2]", ...
+    "Position", [1585, 500, 1590, 690]);
 leftTorqueSplit = add_block("simulink/Signal Routing/Demux", ...
     subsystem + "/Left Torque Split", "Outputs", "3", ...
-    "Position", [1640, 335, 1645, 415]);
+    "Position", [1640, 475, 1645, 555]);
 rightTorqueSplit = add_block("simulink/Signal Routing/Demux", ...
     subsystem + "/Right Torque Split", "Outputs", "3", ...
-    "Position", [1640, 715, 1645, 795]);
+    "Position", [1640, 595, 1645, 675]);
 
-leftTerminators = addTerminators(subsystem, "Left", 1640, 440);
-rightTerminators = addTerminators(subsystem, "Right", 1640, 820);
-
-connect(subsystem, upperController, 1, perLegWrench, 1);
-connect(subsystem, perLegWrench, 1, perLegWrenchSplit, 1);
+coupledTerminators = addCoupledTerminators(subsystem, 1700, 700);
 
 leftQ = [
     subsystem + "/Fcn1"
@@ -170,21 +152,15 @@ connectVectorSources(subsystem, rightDq, wheelStateInput, 11);
 connect(subsystem, wheelStateInput, 1, wheelState, 1);
 connect(subsystem, wheelState, 1, wheelPlanner, 1);
 
-wireLegInput(subsystem, leftInput, baseStateZoh, leftQ, leftDq, ...
-    perLegWrenchSplit, wheelPlanner);
-wireLegInput(subsystem, rightInput, baseStateZoh, rightQ, rightDq, ...
-    perLegWrenchSplit, wheelPlanner);
-connect(subsystem, leftInput, 1, leftZoh, 1);
-connect(subsystem, rightInput, 1, rightZoh, 1);
-connect(subsystem, leftZoh, 1, leftQp, 1);
-connect(subsystem, rightZoh, 1, rightQp, 1);
-connect(subsystem, leftQp, 1, leftSplit, 1);
-connect(subsystem, rightQp, 1, rightSplit, 1);
-connect(subsystem, leftSplit, 1, leftTorqueSplit, 1);
-connect(subsystem, rightSplit, 1, rightTorqueSplit, 1);
-for i = 1:numel(leftTerminators)
-    connect(subsystem, leftSplit, i + 1, leftTerminators(i), 1);
-    connect(subsystem, rightSplit, i + 1, rightTerminators(i), 1);
+wireCoupledInput(subsystem, coupledInput, baseStateZoh, leftQ, leftDq, ...
+    rightQ, rightDq, upperController, wheelPlanner);
+connect(subsystem, coupledInput, 1, coupledZoh, 1);
+connect(subsystem, coupledZoh, 1, coupledQp, 1);
+connect(subsystem, coupledQp, 1, coupledSplit, 1);
+connect(subsystem, coupledSplit, 1, leftTorqueSplit, 1);
+connect(subsystem, coupledSplit, 2, rightTorqueSplit, 1);
+for i = 1:numel(coupledTerminators)
+    connect(subsystem, coupledSplit, i + 2, coupledTerminators(i), 1);
 end
 
 leftActuation = [
@@ -203,11 +179,10 @@ for i = 1:3
 end
 
 setZeroPulseAmplitude(model);
-logOutput(leftQp, "leftQpSignal");
-logOutput(rightQp, "rightQpSignal");
+logOutput(coupledQp, "coupledQpSignal");
 logOutput(wheelState, "commonWheelStateSignal");
 logOutput(wheelPlanner, "commonWheelReference");
-logOutput(perLegWrench, "perLegWrenchCommand");
+logOutput(upperController, "totalUpperCommand");
 logOutput(symmetryDiagnostics, "symmetryLegState");
 
 set_param(model, "SolverType", "Variable-step", "Solver", "ode15s", ...
@@ -216,17 +191,18 @@ set_param(model, "SimulationCommand", "update");
 if doSave
     save_system(model, [], "OverwriteIfChangedOnDisk", true);
 end
-fprintf("Configured symmetric two-leg LQR-QP control in %s.\n", model);
+fprintf("Configured coupled two-leg floating-base LQR-QP control in %s.\n", model);
 end
 
-function wireLegInput(parent, inputMux, baseState, q, dq, wrench, wheelReference)
+function wireCoupledInput(parent, inputMux, baseState, qLeft, dqLeft, ...
+        qRight, dqRight, wrench, wheelReference)
 connect(parent, baseState, 1, inputMux, 1);
-connectVectorSources(parent, q, inputMux, 2);
-connectVectorSources(parent, dq, inputMux, 5);
-for i = 1:3
-    connect(parent, wrench, i, inputMux, i + 7);
-end
-connect(parent, wheelReference, 1, inputMux, 11);
+connectVectorSources(parent, qLeft, inputMux, 2);
+connectVectorSources(parent, dqLeft, inputMux, 5);
+connectVectorSources(parent, qRight, inputMux, 8);
+connectVectorSources(parent, dqRight, inputMux, 11);
+connect(parent, wrench, 1, inputMux, 14);
+connect(parent, wheelReference, 1, inputMux, 15);
 end
 
 function connectVectorSources(parent, sources, destination, firstPort)
@@ -235,12 +211,12 @@ for i = 1:numel(sources)
 end
 end
 
-function paths = addTerminators(parent, side, x, y)
+function paths = addCoupledTerminators(parent, x, y)
 suffixes = ["Slack", "Feasible", "Slack Norm", "QP Status", ...
-    "Contact Force"];
+    "Left Contact Force", "Right Contact Force"];
 paths = strings(numel(suffixes), 1);
 for i = 1:numel(suffixes)
-    paths(i) = parent + "/" + side + " " + suffixes(i) + " Terminator";
+    paths(i) = parent + "/Coupled " + suffixes(i) + " Terminator";
     add_block("simulink/Sinks/Terminator", paths(i), ...
         "Position", [x, y + 35*(i - 1), x + 20, y + 20 + 35*(i - 1)]);
 end
