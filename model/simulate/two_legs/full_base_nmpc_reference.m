@@ -28,17 +28,23 @@ xiRaw = planner(4);
 for k = 0:N
     [baseReference, aRef] = floating_base_reference( ...
         t + k*config.Ts, baseLqr);
+    turningReference = turning_motion_reference(t + k*config.Ts, ...
+        baseReference(4), baseLqr.trajectory, config.model.halfTrack);
     stateReference = [
         baseReference(1); 0; baseReference(2);
-        0; baseReference(3); 0;
+        0; baseReference(3); turningReference(1);
         baseReference(4); 0; baseReference(5);
-        0; baseReference(6); 0;
+        0; baseReference(6); turningReference(2);
         xiRef; xiRef; dxiRef; dxiRef
     ];
     planarWrench = feedforwardWrench(aRef, xiRef, config.model);
-    perSideWrench = [planarWrench(1)/2; 0; planarWrench(2)/2; ...
-        0; planarWrench(3)/2; 0];
-    uRef = [perSideWrench; perSideWrench];
+    yawMoment = config.model.inertia(3)*turningReference(3);
+    yawForceDifference = yawMoment/(2*config.model.halfTrack);
+    leftWrench = [planarWrench(1)/2 - yawForceDifference; 0; ...
+        planarWrench(2)/2; 0; planarWrench(3)/2; 0];
+    rightWrench = [planarWrench(1)/2 + yawForceDifference; 0; ...
+        planarWrench(2)/2; 0; planarWrench(3)/2; 0];
+    uRef = [leftWrench; rightWrench];
     uRef = min(max(uRef, config.uMin(:)), config.uMax(:));
     stageReference = [stateReference; uRef; previousWrench];
     if k == 0
