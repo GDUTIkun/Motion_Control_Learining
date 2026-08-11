@@ -44,11 +44,20 @@ assert(numel(spatial.FcLeft) == 3 && numel(spatial.FcRight) == 3);
 assert(numel(spatial.wrenchFeasible) == 12);
 assert(spatial.qpFeasible, "The nominal spatial QP is infeasible.");
 assert(norm(spatial.dynamicsResidual, inf) < 1e-6);
-assert(norm(spatial.contactResidual, inf) < 1e-6);
+assert(isequal(spatial.contactResidual, spatial.contactAcceleration));
+assert(all(isfinite(spatial.contactAcceleration)));
 assert(norm(spatial.wrenchResidual, inf) < 1e-6);
 assert(min(eig(spatial.massMatrix)) > 0);
 assert(all(abs(tauSpatial) <= repmat(ctrl.tauMax, 2, 1) + 1e-8));
 assert(all(spatial.frictionMargin >= -1e-8));
+
+% The contact task accepts one shared weight as well as directional weights.
+ctrl.spatialQpContactAccelWeight = 1e4;
+assignin("base", "ctrl", ctrl);
+clear spatial_two_leg_qp_core
+[~, spatialScalarWeight] = coupled_two_leg_qp_core(xSpatial);
+assert(spatialScalarWeight.qpFeasible);
+assert(all(isfinite(spatialScalarWeight.contactAcceleration)));
 
 % Differential longitudinal/vertical interaction requests must remain
 % distinct instead of being summed before the QP.

@@ -129,6 +129,10 @@ ctrl.spatialQpCommonWrenchScale = [140; 100; 140; 100; 160; 100];
 ctrl.spatialQpDifferentialWrenchScale = ...
     ctrl.spatialQpCommonWrenchScale;
 ctrl.spatialQpWrenchPenalty = 1e6;
+% Soft rolling-contact acceleration task, ordered as
+% [rolling; lateral; normal]. Wrench tracking remains the higher-priority
+% objective; lateral acceleration is penalized most strongly to avoid slip.
+ctrl.spatialQpContactAccelWeight = [1e3; 1e5; 1e4];
 ctrl.spatialQpRollDominantAngle = deg2rad(0.25);
 ctrl.spatialQpRollDominantWbaseQdd = [1e-3; 10; 1e-3; 1e-3; 1e-3; 1e-3];
 ctrl.spatialQpRollDominantWrenchPenalty = 1e9;

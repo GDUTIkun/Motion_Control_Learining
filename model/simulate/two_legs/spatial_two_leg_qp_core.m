@@ -110,6 +110,20 @@ wCommon = getVector(ctrl, "commonModeQpWqdd", ones(3, 1), 3);
 wDifferential = getVector(ctrl, "differentialModeQpWqdd", wCommon, 3);
 wTau = repmat(getVector(ctrl, "qpWtau", 1e-5*ones(3, 1), 3), 2, 1);
 wLambda = zeros(6, 1);
+wContactDirection = getField(ctrl, "spatialQpContactAccelWeight", ...
+    [1e3; 1e5; 1e4]);
+wContactDirection = wContactDirection(:);
+if isscalar(wContactDirection)
+    wContactDirection = repmat(wContactDirection, 3, 1);
+elseif numel(wContactDirection) ~= 3
+    error("spatial_two_leg_qp_core:InvalidContactAccelWeight", ...
+        "spatialQpContactAccelWeight must be a scalar or three elements.");
+end
+if any(~isfinite(wContactDirection) | wContactDirection < 0)
+    error("spatial_two_leg_qp_core:InvalidContactAccelWeight", ...
+        "spatialQpContactAccelWeight must be finite and nonnegative.");
+end
+wContact = repmat(wContactDirection, 2, 1);
 commonWrenchScale = getVector(ctrl, "spatialQpCommonWrenchScale", ...
     [140; 100; 140; 100; 160; 100], 6);
 differentialWrenchScale = getVector(ctrl, ...
@@ -163,16 +177,16 @@ S(7:9, 1:3) = diag(ctrl.tauSign(:));
 S(10:12, 4:6) = diag(ctrl.tauSign(:));
 [Dw, Dlambda, wrenchOffset] = interactionWrenchMap( ...
     modelData, base, leg);
+H(idxQdd, idxQdd) = H(idxQdd, idxQdd) ...
+    + Jc'*diag(wContact)*Jc;
+f(idxQdd) = f(idxQdd) + Jc'*(wContact.*contactBias);
 H = 0.5*(H + H');
-contactRhs = -contactBias ...
-    - getField(ctrl, "constraintVelocityGain", 0)*(Jc*dq);
 wrenchRhs = wrenchCommand - wrenchOffset;
 Aeq = [
     M, -S, -Jc', zeros(nq, nwrench);
-    Jc, zeros(6, ntau + nlambda + nwrench);
     Dw, zeros(nwrench, ntau), Dlambda, -eye(nwrench)
 ];
-beq = [-h; contactRhs; wrenchRhs];
+beq = [-h; wrenchRhs];
 
 [Aineq, bineq] = spatialFrictionConstraints(getField(ctrl, "mu", 0.8), nz, idxLambda);
 if isfinite(kneeMinLeft)
@@ -294,7 +308,8 @@ debug.wrenchSlackNorm = norm(wrenchSlack./wrenchScale);
 debug.wrenchResidual = wrenchFeasible - wrenchCommand - wrenchSlack;
 debug.exitflag = exitflag;
 debug.dynamicsResidual = M*qddSolution + h - S*tau - Jc'*lambda;
-debug.contactResidual = Jc*qddSolution - contactRhs;
+debug.contactAcceleration = Jc*qddSolution + contactBias;
+debug.contactResidual = debug.contactAcceleration;
 debug.qpFeasible = exitflag > 0 && norm(eqResidual, inf) < 1e-4 ...
     && (isempty(ineqResidual) || max(ineqResidual) < 1e-6);
 debug.frictionMargin = frictionMargin;
