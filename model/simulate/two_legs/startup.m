@@ -119,6 +119,19 @@ ctrl.constraintDamping = 1e-9;
 % fight and excites pitch during velocity reversals.
 ctrl.constraintVelocityGain = 5;
 ctrl.qpWbaseQdd = 1e-3 * [1; 1; 1];
+% Full spatial QP: retain all six base accelerations and all three contact
+% force components per wheel.  Wrench slack is normalized per physical
+% channel so force and moment tracking have comparable priority.
+% Track the five controllable base axes above the soft wrench objective.
+% Physical index 3 is lateral translation, which has no active upper input.
+ctrl.spatialQpWbaseQdd = [1e3; 1e3; 1e-3; 1e-3; 1e3; 1e3];
+ctrl.spatialQpCommonWrenchScale = [140; 100; 140; 100; 160; 100];
+ctrl.spatialQpDifferentialWrenchScale = ...
+    ctrl.spatialQpCommonWrenchScale;
+ctrl.spatialQpWrenchPenalty = 1e6;
+ctrl.spatialQpRollDominantAngle = deg2rad(0.25);
+ctrl.spatialQpRollDominantWbaseQdd = [1e-3; 10; 1e-3; 1e-3; 1e-3; 1e-3];
+ctrl.spatialQpRollDominantWrenchPenalty = 1e9;
 % Wheel spin is already tied to base/leg motion by the hard rolling
 % constraint. Keep its acceleration reference soft to avoid duplicating that
 % constraint with a high-bandwidth absolute wheel-angle task.
@@ -187,10 +200,11 @@ base.body.widthY = 0.45;
 base.body.heightZ = 0.32;
 base.body.comPositionBody = [0; 0];
 % The reduced x-z-pitch model projects both hips onto the body CoM. The
-% physical Simscape model keeps their lateral offsets at Z = +/-0.2 m.
+% physical Simscape model connects the left leg at Z = -0.2 m and the
+% right leg at Z = +0.2 m (Rigid Transform10 and Rigid Transform5).
 base.body.hipPositionBody = [0; 0];
-base.body.hipPositionBodyLeft3D = [0; 0; 0.2];
-base.body.hipPositionBodyRight3D = [0; 0; -0.2];
+base.body.hipPositionBodyLeft3D = [0; 0; -0.2];
+base.body.hipPositionBodyRight3D = [0; 0; 0.2];
 base.body.inertiaIyy = base.body.mass * ...
     (base.body.lengthX^2 + base.body.heightZ^2) / 12;
 base.m = base.body.mass;
@@ -228,7 +242,7 @@ base.thetaIntegralLimit = 0.5;
 % Horizontal constant-speed comparison: forward, stop, then reverse home.
 base.trajectory = struct();
 base.trajectory.enabled = true;
-base.trajectory.mode = "stand";
+base.trajectory.mode = "yaw";
 base.trajectory.settleTime = 1.0;
 base.trajectory.cruiseVelocity = 0.5;
 % Strict common mode needs the bounded 0.5 m/s^2 velocity transition used

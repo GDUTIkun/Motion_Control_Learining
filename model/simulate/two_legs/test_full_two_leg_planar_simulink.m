@@ -1,5 +1,5 @@
 function results = test_full_two_leg_planar_simulink()
-%TEST_FULL_TWO_LEG_PLANAR_SIMULINK Validate x/z/pitch/roll/yaw on the plant.
+%TEST_FULL_TWO_LEG_PLANAR_SIMULINK Validate the spatial QP on the 6-DoF plant.
 
 model = "source";
 evalin("base", "startup");
@@ -56,8 +56,8 @@ for k = 1:numel(cases)
         time, state(:, 3), deg2rad(0.1));
     results(k).maxAbsQDelta = max(abs(qDelta), [], 1);
     results(k).maxAbsDqDelta = max(abs(dqDelta), [], 1);
-    results(k).maxAbsXiDelta = max(abs(qp(:, 40)));
-    results(k).maxAbsDxiDelta = max(abs(qp(:, 41)));
+    results(k).maxAbsXiDelta = max(abs(qp(:, 71)));
+    results(k).maxAbsDxiDelta = max(abs(qp(:, 72)));
     results(k).maxAbsLateralState = max(abs(lateralState), [], 1);
     results(k).maxAbsRollYawRate = max(abs(angularVelocity(:, 1:2)), [], 1);
     results(k).finalRollYawDeg = rad2deg(rollYaw(end, 1:2));
@@ -66,11 +66,13 @@ for k = 1:numel(cases)
         attitudeTime, rollYaw(:, 1), deg2rad(0.1));
     results(k).yawSettlingTime = settlingTime( ...
         attitudeTime, rollYaw(:, 2), deg2rad(0.1));
-    results(k).qpFeasibleRatio = mean(qp(:, 14) > 0.5);
-    results(k).minExitFlag = min(qp(:, 19));
-    results(k).maxDynamicsResidual = max(qp(:, 20));
-    results(k).minFrictionMargin = min(qp(:, 32:33), [], "all");
-    results(k).minTorqueMargin = min(qp(:, 34:39), [], "all");
+    results(k).qpFeasibleRatio = mean(qp(:, 32) > 0.5);
+    results(k).minExitFlag = min(qp(:, 39));
+    results(k).maxDynamicsResidual = max(qp(:, 40));
+    results(k).maxContactResidual = max(qp(:, 41));
+    results(k).maxWrenchResidual = max(qp(:, 42));
+    results(k).minFrictionMargin = min(qp(:, 61:64), [], "all");
+    results(k).minTorqueMargin = min(qp(:, 65:70), [], "all");
     results(k).nmpcStatus = unique(nmpcStatus).';
     results(k).meanNmpcCpuTime = mean(nmpcCpuTime);
     results(k).maxNmpcCpuTime = max(nmpcCpuTime);
@@ -82,6 +84,10 @@ for k = 1:numel(cases)
         "%s QP feasible ratio fell below 99%%.", cases(k).name);
     assert(results(k).maxDynamicsResidual < 1e-6, ...
         "%s dynamics residual exceeded 1e-6.", cases(k).name);
+    assert(results(k).maxContactResidual < 1e-4, ...
+        "%s contact residual exceeded 1e-4.", cases(k).name);
+    assert(results(k).maxWrenchResidual < 1e-6, ...
+        "%s wrench residual exceeded 1e-6.", cases(k).name);
     assert(all(nmpcStatus == 0) && all(nmpcFault == 0), ...
         "%s NMPC reported a status or fault.", cases(k).name);
     assert(results(k).minFrictionMargin >= -1e-6, ...

@@ -31,20 +31,36 @@ assert(norm(debug.qdd, inf) < 1e-4, ...
 assert(all(debug.frictionMargin >= -1e-8));
 assert(all(debug.torqueMargin >= -1e-8));
 
-% The full 8-DoF NMPC supplies per-side interaction wrenches. The lower QP
-% tracks their total planar wrench and left/right force difference.
+% The deployed full path retains six base coordinates and three contact
+% force components per wheel.
+fullState = [0; fullBaseNmpc.model.xEq; -traj.zO0];
 fullCommand = fullBaseNmpc.model.uEq;
-fullCommand([1, 7]) = [2; -2];
-fullCommand([3, 9]) = fullCommand([3, 9]) + [3; -3];
-xSpatial = [x(1:19); fullCommand; wheelReference];
-clear coupled_two_leg_qp_core
-[~, spatial] = coupled_two_leg_qp_core(xSpatial);
-halfSpacing = abs(base.body.hipPositionBodyLeft3D(3));
-expectedDifferential = [2; 3];
-expectedMoment = 2*halfSpacing*[3; -2];
-assert(norm(spatial.rollYawMomentCommand - expectedMoment, inf) < 1e-12);
-assert(norm(spatial.contactForceDifferentialCommand ...
-    - expectedDifferential, inf) < 1e-12);
+xSpatial = [fullState; leg.q0; leg.dq0; leg.q0; leg.dq0; ...
+    fullCommand; wheelReference];
+clear coupled_two_leg_qp_core spatial_two_leg_qp_core
+[tauSpatial, spatial] = coupled_two_leg_qp_core(xSpatial);
+assert(spatial.spatialQp && isequal(size(spatial.massMatrix), [12, 12]));
+assert(numel(spatial.FcLeft) == 3 && numel(spatial.FcRight) == 3);
+assert(numel(spatial.wrenchFeasible) == 12);
+assert(spatial.qpFeasible, "The nominal spatial QP is infeasible.");
+assert(norm(spatial.dynamicsResidual, inf) < 1e-6);
+assert(norm(spatial.contactResidual, inf) < 1e-6);
+assert(norm(spatial.wrenchResidual, inf) < 1e-6);
+assert(min(eig(spatial.massMatrix)) > 0);
+assert(all(abs(tauSpatial) <= repmat(ctrl.tauMax, 2, 1) + 1e-8));
+assert(all(spatial.frictionMargin >= -1e-8));
+
+% Differential longitudinal/vertical interaction requests must remain
+% distinct instead of being summed before the QP.
+xSpatialDifferential = xSpatial;
+xSpatialDifferential(31:42) = fullCommand;
+xSpatialDifferential([31, 37]) = [2; -2];
+xSpatialDifferential([33, 39]) = fullCommand([3, 9]) + [3; -3];
+clear spatial_two_leg_qp_core
+[~, spatialDifferential] = coupled_two_leg_qp_core(xSpatialDifferential);
+assert(spatialDifferential.spatialQp);
+assert(norm(spatialDifferential.wrenchCommand ...
+    - xSpatialDifferential(31:42), inf) < 1e-12);
 
 % The deployed reduced QP may use common-mode-specific task priorities, but
 % it must remain symmetric, feasible, and dynamically consistent.

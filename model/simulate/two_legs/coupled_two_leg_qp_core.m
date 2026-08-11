@@ -17,6 +17,14 @@ if mode ~= "full" && mode ~= "common"
 end
 
 x = double(x(:));
+if numel(x) == 46
+    if mode ~= "full"
+        error("coupled_two_leg_qp_core:InvalidMode", ...
+            "The 46D spatial input is only valid in full mode.");
+    end
+    [tau, debug] = spatial_two_leg_qp_core(x);
+    return;
+end
 if numel(x) ~= 26 && numel(x) ~= 35
     error("coupled_two_leg_qp_core:InvalidInput", ...
         "Expected the 26D common or 35D full 8-DoF controller input.");

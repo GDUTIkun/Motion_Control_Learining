@@ -39,6 +39,10 @@ if model == "source_common" && caseMode == "velocity"
     % Keep the 0.5 m/s command, but halve its acceleration to 0.5 m/s^2.
     trajectory.accelDuration = 1.0;
     trajectory.decelDuration = 1.0;
+elseif model == "source" && caseMode == "velocity"
+    % First validated working point of the full spatial QP.  The strict
+    % common-mode model retains its established 0.5 m/s command.
+    trajectory.cruiseVelocity = 0.1;
 end
 stopTime = 10;
 if caseMode == "stand"
