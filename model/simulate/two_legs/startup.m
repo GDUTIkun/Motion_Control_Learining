@@ -109,6 +109,8 @@ ctrl.commonModeZeta = [1.0; ctrl.zeta(2:3)];
 ctrl.commonModeWn = 2 * pi * ctrl.commonModeBandwidthHz;
 ctrl.commonModeKp = diag(ctrl.commonModeWn.^2);
 ctrl.commonModeKd = diag(2 .* ctrl.commonModeZeta .* ctrl.commonModeWn);
+ctrl.differentialModeKp = ctrl.commonModeKp;
+ctrl.differentialModeKd = ctrl.commonModeKd;
 ctrl.tauMax = [160; 160; 45];
 ctrl.tauSign = [1; 1; 1];
 ctrl.constraintDamping = 1e-9;
@@ -124,10 +126,25 @@ ctrl.qpWqdd = [1; 1; 0.01];
 % With no differential posture reserve, keep the common hip/knee near their
 % reference instead of allowing wrench tracking to wind the leg repeatedly.
 ctrl.commonModeQpWqdd = [100; 100; 0.01];
+ctrl.differentialModeQpWqdd = ctrl.commonModeQpWqdd;
+ctrl.differentialModeQpWqdd(3) = 0;
 % In the coupled QP the body wrench is tracked through the floating-base
 % dynamics, so all actuator torques remain regularization terms.
 ctrl.qpWtau = 1e-5 * [1; 1; 1];
 ctrl.qpWFc = [0.0002433157215; 0.0002433157215];
+% The two compliant Simscape contacts need a stronger differential-force
+% regularizer than the rigid-contact QP model.  This suppresses the
+% unobservable left/right load-sharing mode without hard-constraining it.
+ctrl.differentialModeQpWFc = 10 * ones(2, 1);
+ctrl.differentialWheelPositionBandwidthHz = 1.0;
+ctrl.differentialWheelPositionKp = ...
+    (2*pi*ctrl.differentialWheelPositionBandwidthHz)^2;
+ctrl.differentialWheelPositionKd = ...
+    2*(2*pi*ctrl.differentialWheelPositionBandwidthHz);
+% xi_delta remains observable and logged.  Its direct acceleration task is
+% disabled for the compliant-contact plant because it excites the contact
+% mode; q_delta feedback plus differential-force regularization restores it.
+ctrl.differentialWheelPositionQpWeight = 0;
 ctrl.qpSlackScale = [140; 140; 160];
 ctrl.qpWslack = 1e9 * [1; 1; 1];
 % Strict common mode has no differential posture to absorb a reversed body
@@ -201,7 +218,7 @@ base.thetaIntegralLimit = 0.5;
 % Horizontal constant-speed comparison: forward, stop, then reverse home.
 base.trajectory = struct();
 base.trajectory.enabled = true;
-base.trajectory.mode = "velocity";
+base.trajectory.mode = "stand";
 base.trajectory.settleTime = 1.0;
 base.trajectory.cruiseVelocity = 0.5;
 % Strict common mode needs the bounded 0.5 m/s^2 velocity transition used

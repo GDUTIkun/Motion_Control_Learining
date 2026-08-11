@@ -60,14 +60,16 @@ qFull = [baseState(1:3); qLeft; qRight];
 dqFull = [baseState(4:6); dqLeft; dqRight];
 [M, h, Jc, dJcDq, wheelData] = floatingBaseDynamics( ...
     qFull, dqFull, base, leg);
-if mode == "common" && isfield(ctrl, "commonModeJointDamping")
+[xiDifferential, dxiDifferential] = differentialWheelState( ...
+    qLeft, dqLeft, qRight, dqRight, baseState, leg, ctrl);
+if isfield(ctrl, "commonModeJointDamping")
     jointDamping = ctrl.commonModeJointDamping(:);
     h(4:6) = h(4:6) + jointDamping .* dqLeft;
     h(7:9) = h(7:9) + jointDamping .* dqRight;
 end
 
 commandModel = base;
-if mode == "common" && evalin("base", "exist('baseNmpc', 'var')") == 1
+if evalin("base", "exist('baseNmpc', 'var')") == 1
     baseNmpc = evalin("base", "baseNmpc");
     commandModel.m = baseNmpc.model.m;
     commandModel.Iyy = baseNmpc.model.Iyy;
@@ -78,12 +80,32 @@ perLegForce = base.symmetricLoadShare * upperCommand(1:2);
 [qd, dqd, ddqd] = floating_base_leg_reference(t, ...
     baseState, traj, leg, base, aHCmd, perLegForce, true, ...
     wheelReference);
-qddLeftCmd = relativeLegAccelerationCommand(qLeft, dqLeft, ...
-    qd, dqd, ddqd, baseState, baseQddCmd, ctrl);
+if mode == "common"
+    qddLeftCmd = relativeLegAccelerationCommand(qLeft, dqLeft, ...
+        qd, dqd, ddqd, baseState, baseQddCmd, ctrl);
+    qddRightCmd = relativeLegAccelerationCommand(qRight, dqRight, ...
+        qd, dqd, ddqd, baseState, baseQddCmd, ctrl);
+else
+    commonCtrl = ctrl;
+    commonCtrl.Kp = getCtrlField(ctrl, "commonModeKp", ctrl.Kp);
+    commonCtrl.Kd = getCtrlField(ctrl, "commonModeKd", ctrl.Kd);
+    qCommon = 0.5 * (qLeft + qRight);
+    dqCommon = 0.5 * (dqLeft + dqRight);
+    qDifferential = 0.5 * (qLeft - qRight);
+    dqDifferential = 0.5 * (dqLeft - dqRight);
+    qddCommonCmd = relativeLegAccelerationCommand(qCommon, dqCommon, ...
+        qd, dqd, ddqd, baseState, baseQddCmd, commonCtrl);
+    differentialKp = getCtrlField(ctrl, ...
+        "differentialModeKp", commonCtrl.Kp);
+    differentialKd = getCtrlField(ctrl, ...
+        "differentialModeKd", commonCtrl.Kd);
+    qddDifferentialCmd = -differentialKp*qDifferential ...
+        - differentialKd*dqDifferential;
+    qddLeftCmd = qddCommonCmd + qddDifferentialCmd;
+    qddRightCmd = qddCommonCmd - qddDifferentialCmd;
+end
 kneeMinLeft = kneeAccelerationLowerBound(qLeft, dqLeft, ctrl);
 qddLeftCmd(2) = max(qddLeftCmd(2), kneeMinLeft);
-qddRightCmd = relativeLegAccelerationCommand(qRight, dqRight, ...
-    qd, dqd, ddqd, baseState, baseQddCmd, ctrl);
 kneeMinRight = kneeAccelerationLowerBound(qRight, dqRight, ctrl);
 qddRightCmd(2) = max(qddRightCmd(2), kneeMinRight);
 
@@ -93,18 +115,56 @@ qddRightCmd(2) = max(qddRightCmd(2), kneeMinRight);
 % the QP actively reject the otherwise-uncontrolled left/right difference.
 wBaseQdd = getCtrlVec(ctrl, "qpWbaseQdd", 1e-3 * ones(3, 1));
 wLegQdd = getCtrlVec(ctrl, "qpWqdd", ones(3, 1));
+% Preserve the validated common-mode priority and give the independent
+% left/right mode its own explicit soft-task weight.
+wCommonQdd = getCtrlVec(ctrl, "commonModeQpWqdd", wLegQdd);
+wDifferentialQdd = getCtrlVec(ctrl, ...
+    "differentialModeQpWqdd", wCommonQdd);
 if mode == "common"
-    wLegQdd = getCtrlVec(ctrl, "commonModeQpWqdd", wLegQdd);
+    wLegQdd = wCommonQdd;
 end
 wTau = getCtrlVec(ctrl, "qpWtau", 1e-5 * ones(3, 1));
 wFc = getCtrlVec(ctrl, "qpWFc", 1e-5 * ones(2, 1));
+wDifferentialFc = getCtrlVec(ctrl, "differentialModeQpWFc", wFc);
 slackScale = getCtrlVec(ctrl, "qpSlackScale", [140; 140; 160]);
 wSlack = getCtrlVec(ctrl, "qpWslack", 1e6 * ones(3, 1));
 qddTarget = [baseQddCmd; qddLeftCmd; qddRightCmd];
-weights = [wBaseQdd; wLegQdd; wLegQdd; wTau; wTau; wFc; wFc; ...
+qddCommonCmd = 0.5 * (qddLeftCmd + qddRightCmd);
+qddDifferentialCmd = 0.5 * (qddLeftCmd - qddRightCmd);
+weights = [wBaseQdd; zeros(6, 1); wTau; wTau; zeros(4, 1); ...
     wSlack ./ (slackScale.^2)];
 H = diag(weights) + 1e-9 * eye(22);
-f = [-weights(1:9) .* qddTarget; zeros(13, 1)];
+commonBlock = diag(0.5 * (wCommonQdd + wDifferentialQdd));
+crossBlock = diag(0.5 * (wCommonQdd - wDifferentialQdd));
+H(4:9, 4:9) = [commonBlock, crossBlock; crossBlock, commonBlock] ...
+    + 1e-9 * eye(6);
+commonForceBlock = diag(0.5 * (wFc + wDifferentialFc));
+crossForceBlock = diag(0.5 * (wFc - wDifferentialFc));
+H(16:19, 16:19) = [commonForceBlock, crossForceBlock; ...
+    crossForceBlock, commonForceBlock] + 1e-9 * eye(4);
+f = zeros(22, 1);
+f(1:3) = -wBaseQdd .* baseQddCmd;
+f(4:6) = -wCommonQdd .* qddCommonCmd ...
+    - wDifferentialQdd .* qddDifferentialCmd;
+f(7:9) = -wCommonQdd .* qddCommonCmd ...
+    + wDifferentialQdd .* qddDifferentialCmd;
+xiDifferentialCmd = -getCtrlField(ctrl, ...
+    "differentialWheelPositionKp", 0) * xiDifferential ...
+    - getCtrlField(ctrl, "differentialWheelPositionKd", 0) ...
+    * dxiDifferential;
+JxiDifferential = 0.5 * (wheelData.J(1, :, 1) ...
+    - wheelData.J(1, :, 2));
+xiDifferentialBias = 0.5 * (wheelData.bias(1, 1) ...
+    - wheelData.bias(1, 2));
+if mode == "full"
+    wXiDifferential = getCtrlField(ctrl, ...
+        "differentialWheelPositionQpWeight", 0);
+    xiTarget = xiDifferentialCmd - xiDifferentialBias;
+    H(1:9, 1:9) = H(1:9, 1:9) ...
+        + wXiDifferential * (JxiDifferential' * JxiDifferential);
+    f(1:9) = f(1:9) ...
+        - wXiDifferential * JxiDifferential' * xiTarget;
+end
 tauSign = getCtrlVec(ctrl, "tauSign", ones(3, 1));
 S = zeros(9, 6);
 S(4:6, 1:3) = diag(tauSign);
@@ -123,15 +183,13 @@ if mode == "common"
     return;
 end
 
-[DwReduced, wrenchOffset] = baseWrenchMap(baseState(3), base);
-Dw = zeros(3, 9);
-Dw(:, 1:3) = DwReduced(:, 1:3);
+[Dw, Dforce, wrenchOffset] = fullInteractionWrenchMap(wheelData, leg);
 wrenchRhs = wrenchCommand - wrenchOffset;
 
 Aeq = [
     M, -S, -Jc', zeros(9, 3);
     Jc, zeros(4, 13);
-    Dw, zeros(3, 10), -eye(3)
+    Dw, zeros(3, 6), Dforce, -eye(3)
 ];
 beq = [-h; contactRhs; wrenchRhs];
 
@@ -197,7 +255,7 @@ tau = z(10:15);
 qddSolution = z(1:9);
 contactForce = z(16:19);
 wrenchSlack = z(20:22);
-wrenchFeasible = Dw * qddSolution + wrenchOffset;
+wrenchFeasible = Dw*qddSolution + Dforce*contactForce + wrenchOffset;
 
 eqResidual = Aeq * z - beq;
 ineqResidual = Aineq * z - bineq;
@@ -216,6 +274,24 @@ debug.wrenchSlackNorm = norm(wrenchSlack ./ slackScale);
 debug.dynamicsResidual = M*qddSolution + h ...
     - S*tau - Jc'*contactForce;
 debug.symmetryQddError = qddSolution(4:6) - qddSolution(7:9);
+debug.qddCommon = 0.5 * (qddSolution(4:6) + qddSolution(7:9));
+debug.qddDifferential = 0.5 * debug.symmetryQddError;
+debug.qddDifferentialCommand = qddDifferentialCmd;
+debug.tauCommon = 0.5 * (tau(1:3) + tau(4:6));
+debug.tauDifferential = 0.5 * (tau(1:3) - tau(4:6));
+debug.contactForceCommon = 0.5 * (debug.FcLeft + debug.FcRight);
+debug.contactForceDifferential = 0.5 * (debug.FcLeft - debug.FcRight);
+debug.xiDifferential = xiDifferential;
+debug.dxiDifferential = dxiDifferential;
+debug.xiDifferentialCommand = xiDifferentialCmd;
+debug.xiDifferentialAcceleration = JxiDifferential*qddSolution ...
+    + xiDifferentialBias;
+mu = getCtrlField(ctrl, "mu", 0.8);
+debug.frictionMargin = [
+    mu*debug.FcLeft(2) - abs(debug.FcLeft(1));
+    mu*debug.FcRight(2) - abs(debug.FcRight(1))
+];
+debug.torqueMargin = [tauMax; tauMax] - abs(tau);
 debug.massMatrix = M;
 debug.commonMode = false;
 end
@@ -371,15 +447,6 @@ aH = baseQdd(1:2) + baseQdd(3)*drdtheta ...
     + dtheta^2*d2rdtheta2;
 end
 
-function [D, offset] = baseWrenchMap(theta, base)
-rH = rotatePitch2D(base.rHBody(:), theta);
-D = zeros(3, 6);
-D(1, 1) = base.m;
-D(2, 2) = base.m;
-D(3, 1:3) = [rH(2)*base.m, -rH(1)*base.m, base.Iyy];
-offset = [0; base.m*base.g; -rH(1)*base.m*base.g];
-end
-
 function [M, h, Jc, dJcDq, wheelData] = floatingBaseDynamics(q, dq, base, leg)
 n = 9;
 M = zeros(n);
@@ -436,6 +503,40 @@ for side = 1:2
     dJcDq(rows) = bw;
 end
 M = (M + M') / 2;
+end
+
+function [xiDifferential, dxiDifferential] = differentialWheelState( ...
+        qLeft, dqLeft, qRight, dqRight, baseState, leg, ctrl)
+pitchSign = getCtrlField(ctrl, "basePitchToAbsHipSign", 1);
+qLeftAbsolute = qLeft;
+qRightAbsolute = qRight;
+dqLeftAbsolute = dqLeft;
+dqRightAbsolute = dqRight;
+qLeftAbsolute(1) = qLeftAbsolute(1) + pitchSign*baseState(3);
+qRightAbsolute(1) = qRightAbsolute(1) + pitchSign*baseState(3);
+dqLeftAbsolute(1) = dqLeftAbsolute(1) + pitchSign*baseState(6);
+dqRightAbsolute(1) = dqRightAbsolute(1) + pitchSign*baseState(6);
+left = wheel_leg_kinematics(qLeftAbsolute, dqLeftAbsolute, [], leg);
+right = wheel_leg_kinematics(qRightAbsolute, dqRightAbsolute, [], leg);
+xiDifferential = 0.5 * (left.pO(1) - right.pO(1));
+dxiDifferential = 0.5 * (left.vO(1) - right.vO(1));
+end
+
+function [Dqdd, Dforce, offset] = fullInteractionWrenchMap(wheelData, leg)
+% Independent-side form of the validated strict common-mode wrench map.
+Dqdd = zeros(3, 9);
+Dforce = zeros(3, 4);
+offset = zeros(3, 1);
+B = [1, 0; 0, 1; leg.r, 0];
+for side = 1:2
+    J = wheelData.J(:, :, side);
+    W = wheelData.W(:, :, side);
+    bias = wheelData.bias(:, side);
+    Dqdd = Dqdd + [-leg.mw*J(1, :); -leg.mw*J(2, :); -leg.Iw*W];
+    Dforce(:, 2*side-1:2*side) = B;
+    offset = offset + [-leg.mw*bias(1); ...
+        -leg.mw*bias(2) - leg.mw*leg.g; 0];
+end
 end
 
 function [Dqdd, Dforce, offset] = commonInteractionWrenchMap( ...

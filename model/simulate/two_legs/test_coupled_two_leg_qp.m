@@ -9,7 +9,7 @@ wheelLqr = evalin("base", "wheelLqr");
 baseNmpc = evalin("base", "baseNmpc");
 
 wheelReference = [wheelLqr.neutral; 0; 0; wheelLqr.neutral];
-upperCommand = [0; -base.m*base.g; 0];
+upperCommand = [-baseNmpc.model.uEq(1:2); baseNmpc.model.uEq(3)];
 x = [0; zeros(6, 1); leg.q0; leg.dq0; leg.q0; leg.dq0; ...
     upperCommand; wheelReference];
 clear coupled_two_leg_qp_core
@@ -26,6 +26,10 @@ assert(norm(tau(1:3) - tau(4:6), inf) < 1e-7);
 assert(norm(debug.FcLeft - debug.FcRight, inf) < 1e-7);
 assert(norm(debug.wrenchFeasible - ...
     (debug.wrenchCommand + debug.wrenchSlack), inf) < 1e-7);
+assert(norm(debug.qdd, inf) < 1e-4, ...
+    "The nominal full two-leg state must be a static QP equilibrium.");
+assert(all(debug.frictionMargin >= -1e-8));
+assert(all(debug.torqueMargin >= -1e-8));
 
 % The deployed reduced QP may use common-mode-specific task priorities, but
 % it must remain symmetric, feasible, and dynamically consistent.
@@ -54,6 +58,22 @@ xDifferential(8) = xDifferential(8) + 0.01;
 qError = xDifferential(8:10) - xDifferential(14:16);
 assert(dot(qError, differential.symmetryQddError) < 0);
 assert(norm(tauDifferential(1:3) - tauDifferential(4:6), inf) > 1e-4);
+assert(differential.xiDifferential * ...
+    differential.xiDifferentialAcceleration <= 0);
+
+% Swapping left and right preserves common quantities and flips differences.
+xMirrored = x;
+xMirrored(14) = xMirrored(14) + 0.01;
+[tauMirrored, mirrored] = coupled_two_leg_qp_core(xMirrored);
+assert(norm(tauDifferential(1:3) - tauMirrored(4:6), inf) < 1e-6);
+assert(norm(tauDifferential(4:6) - tauMirrored(1:3), inf) < 1e-6);
+assert(norm(differential.qddCommon - mirrored.qddCommon, inf) < 1e-6);
+assert(norm(differential.qddDifferential + ...
+    mirrored.qddDifferential, inf) < 1e-6);
+assert(norm(differential.contactForceCommon - ...
+    mirrored.contactForceCommon, inf) < 1e-6);
+assert(norm(differential.contactForceDifferential + ...
+    mirrored.contactForceDifferential, inf) < 1e-6);
 
 upperCommand(1) = -20;
 x(20:22) = upperCommand;
