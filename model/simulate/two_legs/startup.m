@@ -187,10 +187,10 @@ base.body.widthY = 0.45;
 base.body.heightZ = 0.32;
 base.body.comPositionBody = [0; 0];
 % The reduced x-z-pitch model projects both hips onto the body CoM. The
-% physical Simscape model keeps their lateral offsets at y = +/-0.2 m.
+% physical Simscape model keeps their lateral offsets at Z = +/-0.2 m.
 base.body.hipPositionBody = [0; 0];
-base.body.hipPositionBodyLeft3D = [0; 0.2; 0];
-base.body.hipPositionBodyRight3D = [0; -0.2; 0];
+base.body.hipPositionBodyLeft3D = [0; 0; 0.2];
+base.body.hipPositionBodyRight3D = [0; 0; -0.2];
 base.body.inertiaIyy = base.body.mass * ...
     (base.body.lengthX^2 + base.body.heightZ^2) / 12;
 base.m = base.body.mass;
@@ -202,6 +202,16 @@ base.thetaEq = 0;
 base.xEq = [0; 0; 0; 0; 0; 0];
 base.xRef = [0; 0; 0; 0; 0; 0];
 base.x0 = zeros(6, 1);
+base.initialQuaternion = [1, 0, 0, 0];
+base.initialAngularVelocity = zeros(1, 3);
+legPairMass = 2 * (leg.m1 + leg.m2 + leg.mw);
+lateralHipHalfSpacing = abs(base.body.hipPositionBodyLeft3D(3));
+base.Iroll = base.body.mass * ...
+    (base.body.heightZ^2 + base.body.widthY^2) / 12 ...
+    + legPairMass*lateralHipHalfSpacing^2;
+base.Iyaw = base.body.mass * ...
+    (base.body.lengthX^2 + base.body.widthY^2) / 12 ...
+    + legPairMass*lateralHipHalfSpacing^2;
 base.Ts = ctrl.Ts;
 base.controllerType = "discrete";
 base.hipRef = base.xRef(1:2) + base.rHBody;
@@ -285,6 +295,45 @@ baseNmpc.available = isfile(fullfile(baseNmpc.generatedDir, ...
 if baseNmpc.available
     addpath(baseNmpc.generatedDir);
 end
+% Full 8-DoF upper model from the 3D base-wheel-position note: six base
+% coordinates plus independent left/right relative wheel positions produce
+% a 16-state first-order model. Keep the paper's 12D per-side interaction
+% wrench input and fix unrealizable components to zero through input bounds.
+fullBaseNmpc = baseNmpc;
+fullBaseNmpc.variant = "full8dof";
+% The 16-state/12-input SQP-RTI problem is larger than the planar one. Run
+% this full supervisor at 50 Hz with a 0.40 s horizon; the measured solve
+% time then remains comfortably inside its 20 ms deadline.
+fullBaseNmpc.Ts = 0.02;
+fullBaseNmpc.N = 20;
+fullBaseNmpc.maxSolveTime = fullBaseNmpc.Ts;
+fullBaseNmpc.model = full_base_wheel_state_space(base, leg, traj);
+fullBaseNmpc.Q = diag([25, 2, 80, 200, 120, 150, ...
+    8, 1, 16, 20, 10, 15, 25, 25, 2.5, 2.5]);
+activeInputWeight = [0.04, 1, 0.02, 1, 0.04, 1];
+fullBaseNmpc.R1 = diag([activeInputWeight, activeInputWeight]);
+activeIncrementWeight = [0.40, 1, 0.20, 1, 0.40, 1];
+fullBaseNmpc.R2 = diag([activeIncrementWeight, activeIncrementWeight]);
+fullBaseNmpc.W_e = fullBaseNmpc.Q;
+perSideMin = [-40; 0; 0; 0; -20; 0];
+perSideMax = [ 40; 0; 70; 0;  20; 0];
+fullBaseNmpc.uMin = repmat(perSideMin, 2, 1);
+fullBaseNmpc.uMax = repmat(perSideMax, 2, 1);
+fullBaseNmpc.solverName = "full_base_wheel_16state_nmpc";
+fullBaseNmpc.sfunName = "acados_solver_sfunction_" ...
+    + fullBaseNmpc.solverName;
+fullTsTag = replace(string(sprintf("%.9g", fullBaseNmpc.Ts)), ...
+    [".", "-", "+"], ["p", "m", ""]);
+fullBaseNmpc.buildTag = "Ts_" + fullTsTag + "_N_" ...
+    + string(fullBaseNmpc.N) + "_paper_8dof_v1";
+fullBaseNmpc.generatedDir = fullfile(simulateDir, "generated", ...
+    fullBaseNmpc.solverName, fullBaseNmpc.buildTag);
+fullBaseNmpc.referenceSize = 40*fullBaseNmpc.N + 16;
+fullBaseNmpc.available = isfile(fullfile( ...
+    fullBaseNmpc.generatedDir, fullBaseNmpc.sfunName + "." + mexext));
+if fullBaseNmpc.available
+    addpath(fullBaseNmpc.generatedDir);
+end
 
 assignin("base", "leg", leg);
 assignin("base", "ctrl", ctrl);
@@ -293,6 +342,7 @@ assignin("base", "base", base);
 assignin("base", "baseLqr", baseLqr);
 assignin("base", "wheelLqr", wheelLqr);
 assignin("base", "baseNmpc", baseNmpc);
+assignin("base", "fullBaseNmpc", fullBaseNmpc);
 
 [base, leg, baseLqr] = set_initial_base_state(base.x0);
 
@@ -310,7 +360,7 @@ fprintf("Floating base body: %.2f x %.2f x %.2f m, m = %.2f kg, Iyy = %.4f kg*m^
     base.body.mass, base.body.inertiaIyy);
 fprintf("Planar hip projection: [%.4f; %.4f] m; lateral hips: +/-%.4f m.\n", ...
     base.rHBody(1), base.rHBody(2), ...
-    abs(base.body.hipPositionBodyLeft3D(2)));
+    abs(base.body.hipPositionBodyLeft3D(3)));
 fprintf("Upper NMPC equilibrium [FHx; FHz; MBy] = [%.4f; %.4f; %.4f].\n", ...
     baseNmpc.model.uEq(1), baseNmpc.model.uEq(2), baseNmpc.model.uEq(3));
 fprintf("Wheel-position planner: %s, scheduled height %.3f to %.3f m.\n", ...
@@ -321,4 +371,10 @@ if baseNmpc.available
 else
     fprintf("Direct upper-layer NMPC S-Function is not built. Run " + ...
         "build_base_nmpc_solver(true).\n");
+end
+if fullBaseNmpc.available
+    fprintf("Full 16-state/12-input NMPC S-Function ready, Ts = %.4f s, N = %d.\n", ...
+        fullBaseNmpc.Ts, fullBaseNmpc.N);
+else
+    fprintf("Full 16-state/12-input NMPC S-Function is not built.\n");
 end

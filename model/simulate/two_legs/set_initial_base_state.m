@@ -1,7 +1,8 @@
-function [base, leg, baseLqr] = set_initial_base_state(x0Request)
+function [base, leg, baseLqr] = set_initial_base_state(x0Request, rollYawRequest)
 %SET_INITIAL_BASE_STATE Set a consistent floating-base initial condition.
 %
 % x0Request = [xOffset; zOffset; thetaB; dxB; dzB; dthetaB]
+% rollYawRequest = [roll; yaw; droll; dyaw] about physical X/Y axes.
 %
 % The x/z entries are offsets relative to the equilibrium pose. For a pitch
 % disturbance, the base CoM is shifted so the hip point stays at the same
@@ -11,11 +12,19 @@ function [base, leg, baseLqr] = set_initial_base_state(x0Request)
 if nargin < 1 || isempty(x0Request)
     x0Request = zeros(6, 1);
 end
+if nargin < 2 || isempty(rollYawRequest)
+    rollYawRequest = zeros(4, 1);
+end
 
 x0Request = double(x0Request(:));
 if numel(x0Request) ~= 6
     error("set_initial_base_state:InvalidInput", ...
         "x0Request must be [x; z; theta; dx; dz; dtheta].");
+end
+rollYawRequest = double(rollYawRequest(:));
+if numel(rollYawRequest) ~= 4
+    error("set_initial_base_state:InvalidAttitudeInput", ...
+        "rollYawRequest must be [roll; yaw; droll; dyaw].");
 end
 
 base = evalin("base", "base");
@@ -43,6 +52,10 @@ end
 % translational offsets on top.
 basePos0 = basePosEq + x0Request(1:2) + rHEq - rH0;
 base.x0 = [basePos0; theta0; x0Request(4:5); dtheta0];
+base.initialQuaternion = eulerXyZQuaternion( ...
+    rollYawRequest(1), rollYawRequest(2), theta0);
+base.initialAngularVelocity = [rollYawRequest(3), ...
+    rollYawRequest(4), dtheta0];
 
 qAbs0 = [traj.qJoint0; traj.qw0];
 dqAbs0 = [traj.dqJoint0; 0];
@@ -69,6 +82,22 @@ assignin("base", "leg", leg);
 if ~isempty(baseLqr)
     assignin("base", "baseLqr", baseLqr);
 end
+end
+
+function quaternion = eulerXyZQuaternion(roll, yaw, pitch)
+% Compose q = qZ(pitch) * qY(yaw) * qX(roll), scalar component first.
+cr = cos(roll/2);
+sr = sin(roll/2);
+cy = cos(yaw/2);
+sy = sin(yaw/2);
+cp = cos(pitch/2);
+sp = sin(pitch/2);
+quaternion = [
+    cp*cy*cr + sp*sy*sr, ...
+    cp*cy*sr - sp*sy*cr, ...
+    cp*sy*cr + sp*cy*sr, ...
+    sp*cy*cr - cp*sy*sr
+];
 end
 
 function rWorld = rotatePitch2D(rBody, theta)

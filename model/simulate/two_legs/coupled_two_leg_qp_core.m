@@ -2,9 +2,8 @@ function [tau, debug] = coupled_two_leg_qp_core(x, mode)
 %COUPLED_TWO_LEG_QP_CORE Floating-base QP shared by both wheel legs.
 %
 % x = [t; xB; zB; thetaB; dxB; dzB; dthetaB;
-%      qL(3); dqL(3); qR(3); dqR(3); upperCommand(3); wheelRef(4)]
-% upperCommand keeps the existing Simulink convention
-% [FHx_ext_total; FHz_ext_total; MBy_des].
+%      qL(3); dqL(3); qR(3); dqR(3); upperCommand(3 or 12); wheelRef(4)]
+% The 12D full-model command is [FL(3); TL(3); FR(3); TR(3)].
 
 persistent qpOptions zWarm zWarmCommon
 
@@ -18,9 +17,9 @@ if mode ~= "full" && mode ~= "common"
 end
 
 x = double(x(:));
-if numel(x) ~= 26
+if numel(x) ~= 26 && numel(x) ~= 35
     error("coupled_two_leg_qp_core:InvalidInput", ...
-        "Expected the 26D coupled two-leg controller input.");
+        "Expected the 26D common or 35D full 8-DoF controller input.");
 end
 
 leg = evalin("base", "leg");
@@ -43,9 +42,17 @@ qLeft = x(8:10);
 dqLeft = x(11:13);
 qRight = x(14:16);
 dqRight = x(17:19);
-upperCommand = x(20:22);
-wheelReference = x(23:26);
-wrenchCommand = [-upperCommand(1:2); upperCommand(3)];
+upperCommand = x(20:end-4);
+wheelReference = x(end-3:end);
+if numel(upperCommand) == 12
+    wrenchLeftCommand = upperCommand([1, 3, 5]);
+    wrenchRightCommand = upperCommand([7, 9, 11]);
+    wrenchCommand = wrenchLeftCommand + wrenchRightCommand;
+else
+    wrenchLeftCommand = zeros(3, 1);
+    wrenchRightCommand = zeros(3, 1);
+    wrenchCommand = [-upperCommand(1:2); upperCommand(3)];
+end
 
 if mode == "common"
     qCommon = 0.5 * (qLeft + qRight);
@@ -76,7 +83,7 @@ if evalin("base", "exist('baseNmpc', 'var')") == 1
 end
 [baseQddCmd, aHCmd] = desiredBaseAcceleration(baseState, ...
     wrenchCommand, commandModel);
-perLegForce = base.symmetricLoadShare * upperCommand(1:2);
+perLegForce = -base.symmetricLoadShare*wrenchCommand(1:2);
 [qd, dqd, ddqd] = floating_base_leg_reference(t, ...
     baseState, traj, leg, base, aHCmd, perLegForce, true, ...
     wheelReference);
@@ -148,6 +155,25 @@ f(4:6) = -wCommonQdd .* qddCommonCmd ...
     - wDifferentialQdd .* qddDifferentialCmd;
 f(7:9) = -wCommonQdd .* qddCommonCmd ...
     + wDifferentialQdd .* qddDifferentialCmd;
+contactForceDifferentialCommand = zeros(2, 1);
+rollYawMomentCommand = zeros(2, 1);
+if mode == "full" && numel(upperCommand) == 12
+    contactForceDifferentialCommand = 0.5*( ...
+        wrenchLeftCommand(1:2) - wrenchRightCommand(1:2));
+    lateralHalfSpacing = abs(base.body.hipPositionBodyLeft3D(3));
+    if lateralHalfSpacing <= 0
+        error("coupled_two_leg_qp_core:InvalidHipSpacing", ...
+            "The lateral hip half-spacing must be positive.");
+    end
+    % Controller-frame moments produced by the left/right force split.
+    rollYawMomentCommand = 2*lateralHalfSpacing ...
+        * [contactForceDifferentialCommand(2); ...
+        -contactForceDifferentialCommand(1)];
+    f(16:17) = -wDifferentialFc ...
+        .* contactForceDifferentialCommand;
+    f(18:19) = wDifferentialFc ...
+        .* contactForceDifferentialCommand;
+end
 xiDifferentialCmd = -getCtrlField(ctrl, ...
     "differentialWheelPositionKp", 0) * xiDifferential ...
     - getCtrlField(ctrl, "differentialWheelPositionKd", 0) ...
@@ -281,6 +307,8 @@ debug.tauCommon = 0.5 * (tau(1:3) + tau(4:6));
 debug.tauDifferential = 0.5 * (tau(1:3) - tau(4:6));
 debug.contactForceCommon = 0.5 * (debug.FcLeft + debug.FcRight);
 debug.contactForceDifferential = 0.5 * (debug.FcLeft - debug.FcRight);
+debug.rollYawMomentCommand = rollYawMomentCommand;
+debug.contactForceDifferentialCommand = contactForceDifferentialCommand;
 debug.xiDifferential = xiDifferential;
 debug.dxiDifferential = dxiDifferential;
 debug.xiDifferentialCommand = xiDifferentialCmd;

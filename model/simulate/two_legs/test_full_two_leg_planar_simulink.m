@@ -1,7 +1,8 @@
 function results = test_full_two_leg_planar_simulink()
-%TEST_FULL_TWO_LEG_PLANAR_SIMULINK Validate x/z/pitch on the 6-DoF plant.
+%TEST_FULL_TWO_LEG_PLANAR_SIMULINK Validate x/z/pitch/roll/yaw on the plant.
 
 model = "source";
+evalin("base", "startup");
 load_system(model);
 initFcn = get_param(model, "InitFcn");
 wasDirty = get_param(model, "Dirty");
@@ -9,19 +10,27 @@ cleanup = onCleanup(@() restoreModel(model, initFcn, wasDirty));
 set_param(model, "InitFcn", "");
 
 cases = [
-    struct("name", "stand", "tracking", "stand", "stopTime", 5, "pitch", 0)
-    struct("name", "z", "tracking", "z", "stopTime", 10, "pitch", 0)
-    struct("name", "velocity", "tracking", "velocity", "stopTime", 10, "pitch", 0)
+    struct("name", "stand", "tracking", "stand", "stopTime", 5, ...
+        "pitch", 0, "roll", 0, "yaw", 0)
+    struct("name", "z", "tracking", "z", "stopTime", 10, ...
+        "pitch", 0, "roll", 0, "yaw", 0)
+    struct("name", "velocity", "tracking", "velocity", "stopTime", 10, ...
+        "pitch", 0, "roll", 0, "yaw", 0)
     struct("name", "pitch", "tracking", "stand", "stopTime", 5, ...
-        "pitch", deg2rad(2))
+        "pitch", deg2rad(2), "roll", 0, "yaw", 0)
+    struct("name", "roll", "tracking", "stand", "stopTime", 5, ...
+        "pitch", 0, "roll", deg2rad(2), "yaw", 0)
+    struct("name", "yaw", "tracking", "stand", "stopTime", 5, ...
+        "pitch", 0, "roll", 0, "yaw", deg2rad(2))
 ];
 results = repmat(struct(), numel(cases), 1);
 
 for k = 1:numel(cases)
-    evalin("base", "startup");
-    set_initial_base_state([0; 0; cases(k).pitch; 0; 0; 0]);
+    set_initial_base_state([0; 0; cases(k).pitch; 0; 0; 0], ...
+        [cases(k).roll; cases(k).yaw; 0; 0]);
     configure_base_tracking_case(cases(k).tracking, "lqr", model);
-    clear coupled_two_leg_qp_core base_nmpc_command wheel_position_governor_step
+    clear coupled_two_leg_qp_core full_base_nmpc_command ...
+        wheel_position_governor_step
     out = sim(model, "StopTime", string(cases(k).stopTime), ...
         "ReturnWorkspaceOutputs", "on");
     logs = out.logsout;
@@ -30,8 +39,12 @@ for k = 1:numel(cases)
     [~, qp] = namedSignal(logs, "coupledQpSignal");
     [~, symmetry] = namedSignal(logs, "symmetryLegState");
     [~, angularVelocity] = namedSignal(logs, "baseAngularVelocity");
+    [attitudeTime, rollYaw] = namedSignal(logs, "baseRollYawState");
     [~, lateralState] = namedSignal(logs, "baseLateralState");
+    [~, fullNmpcState] = namedSignal(logs, "baseNmpcState");
+    [~, nmpcWrench] = namedSignal(logs, "nmpcBodyWrench");
     [~, nmpcStatus] = namedSignal(logs, "nmpcStatus");
+    [~, nmpcCpuTime] = namedSignal(logs, "nmpcCpuTime");
     [~, nmpcFault] = namedSignal(logs, "nmpcFault");
 
     qDelta = 0.5 * (symmetry(:, 1:3) - symmetry(:, 7:9));
@@ -47,13 +60,23 @@ for k = 1:numel(cases)
     results(k).maxAbsDxiDelta = max(abs(qp(:, 41)));
     results(k).maxAbsLateralState = max(abs(lateralState), [], 1);
     results(k).maxAbsRollYawRate = max(abs(angularVelocity(:, 1:2)), [], 1);
+    results(k).finalRollYawDeg = rad2deg(rollYaw(end, 1:2));
+    results(k).maxAbsRollYawDeg = rad2deg(max(abs(rollYaw(:, 1:2)), [], 1));
+    results(k).rollSettlingTime = settlingTime( ...
+        attitudeTime, rollYaw(:, 1), deg2rad(0.1));
+    results(k).yawSettlingTime = settlingTime( ...
+        attitudeTime, rollYaw(:, 2), deg2rad(0.1));
     results(k).qpFeasibleRatio = mean(qp(:, 14) > 0.5);
     results(k).minExitFlag = min(qp(:, 19));
     results(k).maxDynamicsResidual = max(qp(:, 20));
     results(k).minFrictionMargin = min(qp(:, 32:33), [], "all");
     results(k).minTorqueMargin = min(qp(:, 34:39), [], "all");
     results(k).nmpcStatus = unique(nmpcStatus).';
+    results(k).meanNmpcCpuTime = mean(nmpcCpuTime);
+    results(k).maxNmpcCpuTime = max(nmpcCpuTime);
     results(k).nmpcFaultRatio = mean(nmpcFault ~= 0);
+    assert(size(fullNmpcState, 2) == 16 && size(nmpcWrench, 2) == 12, ...
+        "%s did not use the 16-state/12-input full NMPC.", cases(k).name);
 
     assert(results(k).qpFeasibleRatio > 0.99, ...
         "%s QP feasible ratio fell below 99%%.", cases(k).name);
@@ -65,13 +88,26 @@ for k = 1:numel(cases)
         "%s violated a friction margin.", cases(k).name);
     assert(results(k).minTorqueMargin >= -1e-6, ...
         "%s violated a torque margin.", cases(k).name);
+    assert(results(k).maxNmpcCpuTime <= evalin("base", ...
+        "fullBaseNmpc.maxSolveTime"), ...
+        "%s NMPC exceeded its supervisory deadline.", cases(k).name);
+    if cases(k).roll ~= 0
+        assert(abs(results(k).finalRollYawDeg(1)) < 0.2, ...
+            "The roll disturbance did not recover below 0.2 deg.");
+    end
+    if cases(k).yaw ~= 0
+        assert(abs(results(k).finalRollYawDeg(2)) < 0.2, ...
+            "The yaw disturbance did not recover below 0.2 deg.");
+    end
 
     fprintf(["%s: final [x z pitch] = [%.4g %.4g %.4g deg], " + ...
-        "QP %.2f%%, dyn %.3g, max |xiDelta| %.3g m.\n"], ...
+        "roll/yaw = [%.4g %.4g] deg, QP %.2f%%, dyn %.3g, " + ...
+        "max |xiDelta| %.3g m, NMPC max %.3g ms.\n"], ...
         cases(k).name, ...
         state(end, 1), state(end, 2), rad2deg(state(end, 3)), ...
+        results(k).finalRollYawDeg(1), results(k).finalRollYawDeg(2), ...
         100*results(k).qpFeasibleRatio, results(k).maxDynamicsResidual, ...
-        results(k).maxAbsXiDelta);
+        results(k).maxAbsXiDelta, 1e3*results(k).maxNmpcCpuTime);
 end
 clear cleanup
 end

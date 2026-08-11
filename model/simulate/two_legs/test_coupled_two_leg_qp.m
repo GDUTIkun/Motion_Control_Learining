@@ -31,6 +31,21 @@ assert(norm(debug.qdd, inf) < 1e-4, ...
 assert(all(debug.frictionMargin >= -1e-8));
 assert(all(debug.torqueMargin >= -1e-8));
 
+% The full 8-DoF NMPC supplies per-side interaction wrenches. The lower QP
+% tracks their total planar wrench and left/right force difference.
+fullCommand = fullBaseNmpc.model.uEq;
+fullCommand([1, 7]) = [2; -2];
+fullCommand([3, 9]) = fullCommand([3, 9]) + [3; -3];
+xSpatial = [x(1:19); fullCommand; wheelReference];
+clear coupled_two_leg_qp_core
+[~, spatial] = coupled_two_leg_qp_core(xSpatial);
+halfSpacing = abs(base.body.hipPositionBodyLeft3D(3));
+expectedDifferential = [2; 3];
+expectedMoment = 2*halfSpacing*[3; -2];
+assert(norm(spatial.rollYawMomentCommand - expectedMoment, inf) < 1e-12);
+assert(norm(spatial.contactForceDifferentialCommand ...
+    - expectedDifferential, inf) < 1e-12);
+
 % The deployed reduced QP may use common-mode-specific task priorities, but
 % it must remain symmetric, feasible, and dynamically consistent.
 upperCommandCommon = [-baseNmpc.model.uEq(1:2); baseNmpc.model.uEq(3)];
