@@ -13,7 +13,7 @@ function [tau, debug] = spatial_two_leg_qp_core(x)
 % represented by the actuator selection matrix rather than deleting the
 % roll/yaw/lateral equations.
 
-persistent qpOptions zWarm rollRecoveryMode
+persistent qpOptions zWarm
 
 x = double(x(:));
 if numel(x) ~= 46
@@ -35,6 +35,20 @@ qRight = x(25:27);
 dqRight = x(28:30);
 wrenchCommand = x(31:42);
 wheelReference = x(43:46);
+xiCommon = 0.5*(state(13) + state(14));
+dxiCommon = 0.5*(state(15) + state(16));
+xiDifferential = 0.5*(state(13) - state(14));
+dxiDifferential = 0.5*(state(15) - state(16));
+xiCommonError = xiCommon - wheelReference(1);
+dxiCommonError = dxiCommon - wheelReference(2);
+xiDifferentialError = xiDifferential;
+dxiDifferentialError = dxiDifferential;
+xiCommonCommand = wheelReference(3) ...
+    - getField(ctrl, "commonWheelPositionKp", 0)*xiCommonError ...
+    - getField(ctrl, "commonWheelPositionKd", 0)*dxiCommonError;
+xiDifferentialCommand = -getField(ctrl, ...
+    "differentialWheelPositionKp", 0)*xiDifferentialError ...
+    - getField(ctrl, "differentialWheelPositionKd", 0)*dxiDifferentialError;
 
 angles = state(4:6);
 [~, ~, eulerRateMap] = rotationData(angles);
@@ -104,47 +118,62 @@ idxLambda = nq + ntau + (1:nlambda);
 idxSlack = nq + ntau + nlambda + (1:nwrench);
 nz = idxSlack(end);
 
-wBase = getVector(ctrl, "spatialQpWbaseQdd", ...
-    1e-3*ones(6, 1), 6);
-wCommon = getVector(ctrl, "commonModeQpWqdd", ones(3, 1), 3);
-wDifferential = getVector(ctrl, "differentialModeQpWqdd", wCommon, 3);
-wTau = repmat(getVector(ctrl, "qpWtau", 1e-5*ones(3, 1), 3), 2, 1);
-wLambda = zeros(6, 1);
-wContactDirection = getField(ctrl, "spatialQpContactAccelWeight", ...
-    [1e3; 1e5; 1e4]);
-wContactDirection = wContactDirection(:);
-if isscalar(wContactDirection)
-    wContactDirection = repmat(wContactDirection, 3, 1);
-elseif numel(wContactDirection) ~= 3
+% Weighted WBC levels use dimensionless priorities on normalized residuals.
+% Level 0 remains in Aeq/Aineq/lb/ub. Levels 1--4 are assembled below.
+wBase = normalizedWeight(ctrl, ...
+    "spatialQpBaseAccelRegularizationWeight", 0.1*ones(6, 1), ...
+    "spatialQpBaseAccelScale", [10; 10; 10; 20; 20; 20], 6);
+wCommon = normalizedWeight(ctrl, ...
+    "spatialQpCommonLegTaskWeight", [5; 5; 0.1], ...
+    "spatialQpLegAccelScale", [20; 20; 50], 3);
+wDifferential = normalizedWeight(ctrl, ...
+    "spatialQpDifferentialLegTaskWeight", [1; 1; 0], ...
+    "spatialQpLegAccelScale", [20; 20; 50], 3);
+wTauPerLeg = normalizedWeight(ctrl, ...
+    "spatialQpTorqueRegularizationWeight", 0.1*ones(3, 1), ...
+    "spatialQpTorqueScale", ctrl.tauMax(:), 3);
+wTau = repmat(wTauPerLeg, 2, 1);
+contactPriority = getField(ctrl, "spatialQpContactAccelWeight", ...
+    [50; 20; 50]);
+contactPriority = contactPriority(:);
+if isscalar(contactPriority)
+    contactPriority = repmat(contactPriority, 3, 1);
+elseif numel(contactPriority) ~= 3
     error("spatial_two_leg_qp_core:InvalidContactAccelWeight", ...
         "spatialQpContactAccelWeight must be a scalar or three elements.");
 end
-if any(~isfinite(wContactDirection) | wContactDirection < 0)
+contactScale = getVector(ctrl, "spatialQpContactAccelScale", ...
+    [5; 2; 5], 3);
+if any(~isfinite(contactPriority) | contactPriority < 0) ...
+        || any(~isfinite(contactScale) | contactScale <= 0)
     error("spatial_two_leg_qp_core:InvalidContactAccelWeight", ...
-        "spatialQpContactAccelWeight must be finite and nonnegative.");
+        "Contact priorities must be nonnegative and scales positive.");
 end
+wContactDirection = contactPriority./contactScale.^2;
 wContact = repmat(wContactDirection, 2, 1);
 commonWrenchScale = getVector(ctrl, "spatialQpCommonWrenchScale", ...
     [140; 100; 140; 100; 160; 100], 6);
 differentialWrenchScale = getVector(ctrl, ...
     "spatialQpDifferentialWrenchScale", commonWrenchScale, 6);
-wrenchPenalty = getField(ctrl, "spatialQpWrenchPenalty", 1e9);
-if t <= 0 || isempty(rollRecoveryMode)
-    rollRecoveryMode = abs(state(4)) > getField(ctrl, ...
-        "spatialQpRollDominantAngle", inf);
+if any(~isfinite(commonWrenchScale) | commonWrenchScale <= 0) ...
+        || any(~isfinite(differentialWrenchScale) ...
+        | differentialWrenchScale <= 0)
+    error("spatial_two_leg_qp_core:InvalidWrenchScale", ...
+        "Wrench residual scales must be finite and positive.");
 end
-if rollRecoveryMode
-    wBase = getVector(ctrl, "spatialQpRollDominantWbaseQdd", ...
-        wBase, 6);
-    wrenchPenalty = getField(ctrl, ...
-        "spatialQpRollDominantWrenchPenalty", wrenchPenalty);
+wrenchPenalty = getField(ctrl, "spatialQpWrenchPenalty", 1e5);
+if ~isscalar(wrenchPenalty) || ~isfinite(wrenchPenalty) ...
+        || wrenchPenalty < 0
+    error("spatial_two_leg_qp_core:InvalidWrenchWeight", ...
+        "spatialQpWrenchPenalty must be finite and nonnegative.");
 end
 wrenchScale = repmat(commonWrenchScale, 2, 1);
 
-weights = [wBase; zeros(6, 1); wTau; wLambda; zeros(12, 1)];
+weights = [wBase; zeros(6, 1); wTau; zeros(6, 1); zeros(12, 1)];
 H = diag(weights) + 1e-9*eye(nz);
 f = zeros(nz, 1);
-f(1:6) = -wBase.*baseQddCommand;
+% Level 4 base acceleration is a zero-centered regularizer only. It does
+% not track an NMPC-derived base acceleration or close a second base loop.
 commonBlock = diag(0.5*(wCommon + wDifferential));
 crossBlock = diag(0.5*(wCommon - wDifferential));
 H(7:12, 7:12) = [commonBlock, crossBlock; crossBlock, commonBlock] ...
@@ -153,9 +182,14 @@ f(7:9) = -wCommon.*qddCommonCommand ...
     - wDifferential.*qddDifferentialCommand;
 f(10:12) = -wCommon.*qddCommonCommand ...
     + wDifferential.*qddDifferentialCommand;
-commonContactWeight = [ctrl.qpWFc(1); 1e-3; ctrl.qpWFc(2)];
-differentialContactWeight = [ctrl.differentialModeQpWFc(1); 10; ...
-    ctrl.differentialModeQpWFc(2)];
+commonContactWeight = normalizedWeight(ctrl, ...
+    "spatialQpCommonContactForceRegularizationWeight", ...
+    0.1*ones(3, 1), "spatialQpContactForceScale", ...
+    [140; 140; 160], 3);
+differentialContactWeight = normalizedWeight(ctrl, ...
+    "spatialQpDifferentialContactForceRegularizationWeight", ...
+    ones(3, 1), "spatialQpContactForceScale", ...
+    [140; 140; 160], 3);
 commonContactBlock = diag(0.5*(commonContactWeight ...
     + differentialContactWeight));
 crossContactBlock = diag(0.5*(commonContactWeight ...
@@ -177,6 +211,29 @@ S(7:9, 1:3) = diag(ctrl.tauSign(:));
 S(10:12, 4:6) = diag(ctrl.tauSign(:));
 [Dw, Dlambda, wrenchOffset] = interactionWrenchMap( ...
     modelData, base, leg);
+wheelLeft = modelData.wheelBody(1);
+wheelRight = modelData.wheelBody(2);
+tangent = modelData.contactBasis(:, 1, 1);
+JxiDifferential = 0.5*tangent'*(modelData.Jv(:, :, wheelLeft) ...
+    - modelData.Jv(:, :, wheelRight));
+JxiCommon = 0.5*tangent'*(modelData.Jv(:, :, wheelLeft) ...
+    + modelData.Jv(:, :, wheelRight));
+JxiCommon(1:3) = JxiCommon(1:3) - tangent';
+xiDifferentialBias = 0.5*tangent'*(modelData.biasV(:, wheelLeft) ...
+    - modelData.biasV(:, wheelRight));
+xiCommonBias = 0.5*tangent'*(modelData.biasV(:, wheelLeft) ...
+    + modelData.biasV(:, wheelRight));
+wheelTaskWeight = normalizedWeight(ctrl, ...
+    "spatialQpWheelConfigurationWeight", [5; 20], ...
+    "spatialQpWheelAccelScale", [5; 5], 2);
+xiCommonTarget = xiCommonCommand - xiCommonBias;
+xiDifferentialTarget = xiDifferentialCommand - xiDifferentialBias;
+H(idxQdd, idxQdd) = H(idxQdd, idxQdd) ...
+    + wheelTaskWeight(1)*(JxiCommon'*JxiCommon) ...
+    + wheelTaskWeight(2)*(JxiDifferential'*JxiDifferential);
+f(idxQdd) = f(idxQdd) ...
+    - wheelTaskWeight(1)*JxiCommon'*xiCommonTarget ...
+    - wheelTaskWeight(2)*JxiDifferential'*xiDifferentialTarget;
 H(idxQdd, idxQdd) = H(idxQdd, idxQdd) ...
     + Jc'*diag(wContact)*Jc;
 f(idxQdd) = f(idxQdd) + Jc'*(wContact.*contactBias);
@@ -220,6 +277,7 @@ elseif getField(ctrl, "qpWarmStart", true)
 end
 
 exitflag = -999;
+solveStart = tic;
 % With inactive friction/torque bounds, the equality-constrained KKT point
 % is already the exact QP optimum and is more reliable than an iterative
 % solve of this strongly weighted hierarchical objective.
@@ -255,6 +313,7 @@ else
     zWarm = z;
     exitflag = max(1, exitflag);
 end
+qpSolveTime = toc(solveStart);
 
 qddSolution = z(idxQdd);
 tau = z(idxTau);
@@ -276,20 +335,6 @@ frictionMargin = [
     muPyramid*lambda(6) - abs(lambda(5))
 ];
 
-wheelLeft = modelData.wheelBody(1);
-wheelRight = modelData.wheelBody(2);
-tangent = modelData.contactBasis(:, 1, 1);
-Jxi = 0.5*tangent'*(modelData.Jv(:, :, wheelLeft) ...
-    - modelData.Jv(:, :, wheelRight));
-xiDifferential = 0.5*tangent'*(modelData.position(:, wheelLeft) ...
-    - modelData.position(:, wheelRight));
-dxiDifferential = Jxi*dq;
-xiBias = 0.5*tangent'*(modelData.biasV(:, wheelLeft) ...
-    - modelData.biasV(:, wheelRight));
-xiDifferentialCommand = -getField(ctrl, ...
-    "differentialWheelPositionKp", 0)*xiDifferential ...
-    - getField(ctrl, "differentialWheelPositionKd", 0)*dxiDifferential;
-
 debug = struct();
 debug.qdd = qddSolution;
 debug.qddBase = qddSolution([1, 3, 2, 4, 5, 6]);
@@ -310,14 +355,30 @@ debug.exitflag = exitflag;
 debug.dynamicsResidual = M*qddSolution + h - S*tau - Jc'*lambda;
 debug.contactAcceleration = Jc*qddSolution + contactBias;
 debug.contactResidual = debug.contactAcceleration;
+contactResidualMatrix = reshape(debug.contactResidual, 3, 2);
+debug.contactResidualDirection = sqrt(sum(contactResidualMatrix.^2, 2));
 debug.qpFeasible = exitflag > 0 && norm(eqResidual, inf) < 1e-4 ...
     && (isempty(ineqResidual) || max(ineqResidual) < 1e-6);
 debug.frictionMargin = frictionMargin;
 debug.torqueMargin = tauMax - abs(tau);
 debug.xiDifferential = xiDifferential;
 debug.dxiDifferential = dxiDifferential;
-debug.xiDifferentialAcceleration = Jxi*qddSolution + xiBias;
+debug.xiCommon = xiCommon;
+debug.dxiCommon = dxiCommon;
+debug.xiCommonError = xiCommonError;
+debug.dxiCommonError = dxiCommonError;
+debug.xiDifferentialError = xiDifferentialError;
+debug.dxiDifferentialError = dxiDifferentialError;
+debug.xiCommonAcceleration = JxiCommon*qddSolution + xiCommonBias;
+debug.xiDifferentialAcceleration = JxiDifferential*qddSolution ...
+    + xiDifferentialBias;
+debug.xiCommonCommand = xiCommonCommand;
 debug.xiDifferentialCommand = xiDifferentialCommand;
+debug.wheelTaskWeight = wheelTaskWeight;
+debug.contactTaskWeight = wContactDirection;
+debug.qConfigurationDifferential = qDifferential;
+debug.dqConfigurationDifferential = dqDifferential;
+debug.qpSolveTime = qpSolveTime;
 debug.massMatrix = M;
 debug.spatialQp = true;
 end
@@ -648,4 +709,17 @@ if numel(value) ~= count
     error("spatial_two_leg_qp_core:InvalidWeight", ...
         "%s must contain %d elements.", name, count);
 end
+end
+
+function weight = normalizedWeight(s, weightName, weightDefault, ...
+        scaleName, scaleDefault, count)
+priority = getVector(s, weightName, weightDefault, count);
+scale = getVector(s, scaleName, scaleDefault, count);
+if any(~isfinite(priority) | priority < 0) ...
+        || any(~isfinite(scale) | scale <= 0)
+    error("spatial_two_leg_qp_core:InvalidNormalizedWeight", ...
+        "%s must be nonnegative and %s must be positive.", ...
+        weightName, scaleName);
+end
+weight = priority./scale.^2;
 end

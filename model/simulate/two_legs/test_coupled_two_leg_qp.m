@@ -40,6 +40,8 @@ xSpatial = [fullState; leg.q0; leg.dq0; leg.q0; leg.dq0; ...
 clear coupled_two_leg_qp_core spatial_two_leg_qp_core
 [tauSpatial, spatial] = coupled_two_leg_qp_core(xSpatial);
 assert(spatial.spatialQp && isequal(size(spatial.massMatrix), [12, 12]));
+assert(numel(coupled_two_leg_qp_signal(xSpatial)) == 74, ...
+    "The deployed spatial QP diagnostic interface must remain 74D.");
 assert(numel(spatial.FcLeft) == 3 && numel(spatial.FcRight) == 3);
 assert(numel(spatial.wrenchFeasible) == 12);
 assert(spatial.qpFeasible, "The nominal spatial QP is infeasible.");
@@ -50,6 +52,22 @@ assert(norm(spatial.wrenchResidual, inf) < 1e-6);
 assert(min(eig(spatial.massMatrix)) > 0);
 assert(all(abs(tauSpatial) <= repmat(ctrl.tauMax, 2, 1) + 1e-8));
 assert(all(spatial.frictionMargin >= -1e-8));
+assert(numel(spatial.contactResidualDirection) == 3 ...
+    && all(isfinite(spatial.contactResidualDirection)));
+assert(isfinite(spatial.qpSolveTime) && spatial.qpSolveTime >= 0);
+assert(all(spatial.wheelTaskWeight > 0) ...
+    && all(spatial.contactTaskWeight > spatial.wheelTaskWeight(1)), ...
+    "Normalized contact priorities must remain above wheel configuration.");
+
+% Equal wheel references create one low-bandwidth common task and a zero
+% differential reference; no steering split is introduced in the WBC.
+xSpatialWheel = xSpatial;
+xSpatialWheel(14:15) = xSpatialWheel(14:15) + [0.01; -0.01];
+clear spatial_two_leg_qp_core
+[~, spatialWheel] = coupled_two_leg_qp_core(xSpatialWheel);
+assert(abs(spatialWheel.xiCommonError) < 1e-12);
+assert(abs(spatialWheel.xiDifferentialError - 0.01) < 1e-12);
+assert(spatialWheel.xiDifferentialCommand < 0);
 
 % The contact task accepts one shared weight as well as directional weights.
 ctrl.spatialQpContactAccelWeight = 1e4;

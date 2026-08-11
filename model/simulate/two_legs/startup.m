@@ -119,32 +119,32 @@ ctrl.constraintDamping = 1e-9;
 % fight and excites pitch during velocity reversals.
 ctrl.constraintVelocityGain = 5;
 ctrl.qpWbaseQdd = 1e-3 * [1; 1; 1];
-% Full spatial QP: retain all six base accelerations and all three contact
-% force components per wheel.  Wrench slack is normalized per physical
-% channel so force and moment tracking have comparable priority.
-% Track the five controllable base axes above the soft wrench objective.
-% Physical index 3 is lateral translation, which has no active upper input.
-ctrl.spatialQpWbaseQdd = [1e3; 1e3; 1e-3; 1e-3; 1e3; 1e3];
+% Full spatial Weighted WBC. Level 0 is enforced by hard dynamics, contact,
+% friction, and actuator constraints. Levels 1--4 use dimensionless task
+% priorities after each residual is divided by its physical scale.
+% Level 1: preserve independent left/right NMPC interaction-wrench tracking.
 ctrl.spatialQpCommonWrenchScale = [140; 100; 140; 100; 160; 100];
 ctrl.spatialQpDifferentialWrenchScale = ...
     ctrl.spatialQpCommonWrenchScale;
-ctrl.spatialQpWrenchPenalty = 1e6;
-% Soft rolling-contact acceleration task, ordered as
-% [rolling; lateral; normal]. Wrench tracking remains the higher-priority
-% objective; lateral acceleration is penalized most strongly to avoid slip.
-ctrl.spatialQpContactAccelWeight = [1e3; 1e5; 1e4];
-ctrl.spatialQpRollDominantAngle = deg2rad(0.25);
-ctrl.spatialQpRollDominantWbaseQdd = [1e-3; 10; 1e-3; 1e-3; 1e-3; 1e-3];
-ctrl.spatialQpRollDominantWrenchPenalty = 1e9;
-% Wheel spin is already tied to base/leg motion by the hard rolling
-% constraint. Keep its acceleration reference soft to avoid duplicating that
-% constraint with a high-bandwidth absolute wheel-angle task.
+ctrl.spatialQpWrenchPenalty = 1e5;
+% Level 2: soft contact residuals [rolling; lateral; normal]. Lateral uses
+% the smallest scale, so it remains the strongest contact direction without
+% restoring a rigid no-slip acceleration constraint.
+ctrl.spatialQpContactAccelScale = [5; 2; 5];
+ctrl.spatialQpContactAccelWeight = [50; 20; 50];
+% Legacy reduced/planar-QP acceleration regularization. The spatial WBC uses
+% directional soft-contact tasks and does not impose rigid rolling kinematics.
 ctrl.qpWqdd = [1; 1; 0.01];
 % With no differential posture reserve, keep the common hip/knee near their
 % reference instead of allowing wrench tracking to wind the leg repeatedly.
 ctrl.commonModeQpWqdd = [100; 100; 0.01];
 ctrl.differentialModeQpWqdd = ctrl.commonModeQpWqdd;
 ctrl.differentialModeQpWqdd(3) = 0;
+% Level 3: spatial leg posture and wheel-position tasks. The common wheel
+% reference is shared by both sides; no steering differential is introduced.
+ctrl.spatialQpLegAccelScale = [20; 20; 50];
+ctrl.spatialQpCommonLegTaskWeight = [5; 5; 0.1];
+ctrl.spatialQpDifferentialLegTaskWeight = [1; 1; 0];
 % In the coupled QP the body wrench is tracked through the floating-base
 % dynamics, so all actuator torques remain regularization terms.
 ctrl.qpWtau = 1e-5 * [1; 1; 1];
@@ -153,15 +153,31 @@ ctrl.qpWFc = [0.0002433157215; 0.0002433157215];
 % regularizer than the rigid-contact QP model.  This suppresses the
 % unobservable left/right load-sharing mode without hard-constraining it.
 ctrl.differentialModeQpWFc = 10 * ones(2, 1);
-ctrl.differentialWheelPositionBandwidthHz = 1.0;
+ctrl.commonWheelPositionBandwidthHz = 0.5;
+ctrl.commonWheelPositionKp = ...
+    (2*pi*ctrl.commonWheelPositionBandwidthHz)^2;
+ctrl.commonWheelPositionKd = ...
+    2*(2*pi*ctrl.commonWheelPositionBandwidthHz);
+ctrl.differentialWheelPositionBandwidthHz = 0.5;
 ctrl.differentialWheelPositionKp = ...
     (2*pi*ctrl.differentialWheelPositionBandwidthHz)^2;
 ctrl.differentialWheelPositionKd = ...
     2*(2*pi*ctrl.differentialWheelPositionBandwidthHz);
-% xi_delta remains observable and logged.  Its direct acceleration task is
-% disabled for the compliant-contact plant because it excites the contact
-% mode; q_delta feedback plus differential-force regularization restores it.
+ctrl.spatialQpWheelAccelScale = [5; 5];
+ctrl.spatialQpWheelConfigurationWeight = [5; 20];
+% The legacy planar QP keeps its direct xi-difference task disabled. The
+% spatial WBC uses the normalized low-bandwidth task above instead.
 ctrl.differentialWheelPositionQpWeight = 0;
+% Level 4: zero-centered acceleration, torque, and contact-force
+% regularization. These select among otherwise comparable solutions and do
+% not track base attitude or duplicate the NMPC loop.
+ctrl.spatialQpBaseAccelScale = [10; 10; 10; 20; 20; 20];
+ctrl.spatialQpBaseAccelRegularizationWeight = 0.1*ones(6, 1);
+ctrl.spatialQpTorqueScale = ctrl.tauMax;
+ctrl.spatialQpTorqueRegularizationWeight = 0.1*ones(3, 1);
+ctrl.spatialQpContactForceScale = [140; 140; 160];
+ctrl.spatialQpCommonContactForceRegularizationWeight = 0.1*ones(3, 1);
+ctrl.spatialQpDifferentialContactForceRegularizationWeight = ones(3, 1);
 ctrl.qpSlackScale = [140; 140; 160];
 ctrl.qpWslack = 1e9 * [1; 1; 1];
 % Strict common mode has no differential posture to absorb a reversed body
@@ -246,7 +262,7 @@ base.thetaIntegralLimit = 0.5;
 % Horizontal constant-speed comparison: forward, stop, then reverse home.
 base.trajectory = struct();
 base.trajectory.enabled = true;
-base.trajectory.mode = "yaw";
+base.trajectory.mode = "stand";
 base.trajectory.settleTime = 1.0;
 base.trajectory.cruiseVelocity = 0.5;
 % Strict common mode needs the bounded 0.5 m/s^2 velocity transition used
